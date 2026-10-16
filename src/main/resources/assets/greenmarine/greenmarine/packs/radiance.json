@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "id": "greenmarine:radiance",
+  "name": "Voxel Radiance",
+  "script": "greenmarine:greenmarine/scripts/radiance.lua",
+  "parameters": {
+    "gain": {
+      "default": 2,
+      "min": 0,
+      "max": 8
+    }
+  },
+  "passes": [
+    {
+      "name": "world_radiance",
+      "fragment": "greenmarine:core/pack_radiance",
+      "fallback": "greenmarine:core/pack_zero",
+      "requires": "voxel_rt",
+      "minQuality": "high",
+      "scale": 0.5,
+      "format": "rgba16f"
+    },
+    {
+      "name": "compose",
+      "fragment": "greenmarine:core/pack_radiance_compose"
+    }
+  ]
+}

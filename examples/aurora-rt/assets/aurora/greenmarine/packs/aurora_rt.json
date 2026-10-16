@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "id": "aurora:rt_example",
+  "name": "Aurora RT Example",
+  "script": "aurora:greenmarine/scripts/aurora_rt.lua",
+  "parameters": {
+    "exposure": {
+      "default": 1.1,
+      "min": 0.25,
+      "max": 3.0
+    },
+    "sunStrength": {
+      "default": 2.0,
+      "min": 0.0,
+      "max": 6.0
+    },
+    "giStrength": {
+      "default": 0.7,
+      "min": 0.0,
+      "max": 3.0
+    },
+    "blend": {
+      "default": 1.0,
+      "min": 0.0,
+      "max": 1.0
+    },
+    "diagnostic": {
+      "default": 0.0,
+      "min": 0.0,
+      "max": 3.0
+    }
+  },
+  "passes": [
+    {
+      "name": "world_rt",
+      "fragment": "aurora:core/aurora_rt",
+      "fallback": "aurora:core/aurora_fallback",
+      "requires": "hardware_rt",
+      "scale": 1
+    }
+  ]
+}

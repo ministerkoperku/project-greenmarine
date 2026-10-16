@@ -1,0 +1,10 @@
+{
+  "pack_format": "K1",
+  "name": "GreenMarine Demo",
+  "namespace": "demo",
+  "description": "GreenMarine glow declarations",
+  "author": "Koper",
+  "version": "0.1.0",
+  "koperlib_min": "0.1.1-alpha",
+  "requires_mods": ["greenmarine"]
+}

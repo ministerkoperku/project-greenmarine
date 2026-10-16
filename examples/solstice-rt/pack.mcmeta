@@ -1,0 +1,13 @@
+{
+  "pack": {
+    "description": "Solstice RT: terrain, traced reflections, atmosphere and weather for GreenMarine 0.7+",
+    "min_format": [
+      97,
+      1
+    ],
+    "max_format": [
+      97,
+      1
+    ]
+  }
+}

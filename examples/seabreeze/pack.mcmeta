@@ -1,0 +1,13 @@
+{
+  "pack": {
+    "description": "Seabreeze: world terrain, water, sky and cloud shaders for GreenMarine 0.6+",
+    "min_format": [
+      97,
+      1
+    ],
+    "max_format": [
+      97,
+      1
+    ]
+  }
+}

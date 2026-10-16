@@ -1,0 +1,23 @@
+{
+  "required": true,
+  "package": "com.koper.greenmarine.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "ClientLevelAccessor",
+    "ClientLevelGeometryMixin",
+    "FrontendGpuDeviceAccessor",
+    "VulkanDeviceAccessor",
+    "BuiltInPackSourceMixin",
+    "GameRendererMixin",
+    "MinecraftTickMixin",
+    "LightmapMixin",
+    "PackSpirvMixin",
+    "VulkanRtFeaturesMixin",
+    "WorldRenderPassMixin",
+    "WorldSubmitMixin",
+    "WorldTransparencyMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

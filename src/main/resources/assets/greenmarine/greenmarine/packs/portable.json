@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "id": "greenmarine:portable",
+  "name": "Marine Portable",
+  "script": "greenmarine:greenmarine/scripts/portable.lua",
+  "parameters": {
+    "exposure": {"default": 1.05, "min": 0.25, "max": 4.0},
+    "saturation": {"default": 1.08, "min": 0.0, "max": 2.0},
+    "warmth": {"default": 0.08, "min": 0.0, "max": 1.0},
+    "ambient": {"default": 0.02, "min": 0.0, "max": 0.5}
+  },
+  "passes": [
+    {"name": "lightmap", "stage": "lightmap", "fragment": "greenmarine:core/pack_lightmap"},
+    {"name": "grade", "fragment": "greenmarine:core/pack_grade", "spirv": "greenmarine:greenmarine/spirv/pack_grade.spv"}
+  ]
+}

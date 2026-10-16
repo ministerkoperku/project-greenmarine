@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "greenmarine_probe",
+  "version": "1.0.0",
+  "name": "GreenMarine runtime probe",
+  "environment": "client",
+  "entrypoints": {"client": ["com.koper.greenmarine.probe.RuntimeProbe"]},
+  "mixins": ["greenmarine-probe.mixins.json"],
+  "depends": {"greenmarine": "*"}
+}

@@ -1,0 +1,113 @@
+#version 460
+#extension GL_EXT_ray_query : require
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0) uniform accelerationStructureEXT World;
+struct Triangle { vec4 a; vec4 b; vec4 c; vec4 uv01; vec4 uv2; vec4 tint; };
+layout(std430,set=0,binding=1) readonly buffer Geometry { Triangle triangles[]; };
+layout(std430,set=0,binding=2) buffer Output { uint pixels[]; };
+layout(std140,set=0,binding=3) uniform TraceFrame {
+    mat4 InverseProjection; mat4 InverseView; mat4 Projection; mat4 View;
+    vec4 Camera; vec4 Viewport; vec4 Sun; vec4 Options;
+};
+layout(set=0,binding=4) uniform sampler2D Atlas;
+vec2 triangleUV(Triangle t,vec2 bary) { return t.uv01.xy*(1.0-bary.x-bary.y)+t.uv01.zw*bary.x+t.uv2.xy*bary.y; }
+vec4 triangleSurface(Triangle t,vec2 bary) { return textureLod(Atlas,triangleUV(t,bary),0.0)*vec4(t.tint.rgb,1); }
+struct Hit { bool found; float distance; uint primitive; vec2 bary; };
+Hit trace(vec3 origin,vec3 direction,float reach) {
+    rayQueryEXT ray;
+    rayQueryInitializeEXT(ray,World,gl_RayFlagsNoneEXT,255,origin,.015,direction,reach);
+    while(rayQueryProceedEXT(ray)) {
+        if(rayQueryGetIntersectionTypeEXT(ray,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
+            uint index=rayQueryGetIntersectionPrimitiveIndexEXT(ray,false);
+            Triangle t=triangles[index];
+            if(t.uv2.z<.5 || triangleSurface(t,rayQueryGetIntersectionBarycentricsEXT(ray,false)).a>.1) rayQueryConfirmIntersectionEXT(ray);
+        }
+    }
+    Hit hit;hit.found=rayQueryGetIntersectionTypeEXT(ray,true)==gl_RayQueryCommittedIntersectionTriangleEXT;
+    hit.distance=hit.found?rayQueryGetIntersectionTEXT(ray,true):reach;
+    hit.primitive=hit.found?rayQueryGetIntersectionPrimitiveIndexEXT(ray,true):0;
+    hit.bary=hit.found?rayQueryGetIntersectionBarycentricsEXT(ray,true):vec2(0);
+    return hit;
+}
+
+float hash(float value) { return fract(sin(value*12.9898)*43758.5453); }
+layout(set=0,binding=5) uniform sampler2D SurfaceNormal;
+layout(set=0,binding=6) uniform sampler2D SurfaceAlbedo;
+vec3 linearSurface(Hit hit) {
+    return pow(max(triangleSurface(triangles[hit.primitive],hit.bary).rgb,vec3(0)),vec3(2.2));
+}
+vec3 hitNormal(Hit hit,vec3 direction) {
+    Triangle t=triangles[hit.primitive];
+    vec3 normal=normalize(cross(t.b.xyz-t.a.xyz,t.c.xyz-t.a.xyz));
+    return dot(normal,direction)>0 ? -normal : normal;
+}
+float sunVisibility(vec3 pos,vec3 normal) {
+    vec3 sun=normalize(Sun.xyz);
+    if(Sun.w<=0.0 || dot(normal,sun)<=0.0) return 0.0;
+    return trace(pos+normal*.035,sun,96.0).found?0.0:1.0;
+}
+vec3 sunIrradiance(vec3 pos,vec3 normal) {
+    float diffuse=max(dot(normal,normalize(Sun.xyz)),0.0);
+    return vec3(max(Options.x,0.0)+diffuse*max(Sun.w,0.0)*sunVisibility(pos,normal));
+}
+void main() {
+    uvec2 p=gl_GlobalInvocationID.xy;uint width=uint(Viewport.x),height=uint(Viewport.y);
+    if(p.x>=width || p.y>=height) return;
+    uint i=p.y*width+p.x,count=width*height;
+    ivec2 captureSize=textureSize(SurfaceNormal,0);
+    // Integer centre mapping avoids rounding either side of exact nearest-texel boundaries.
+    ivec2 captureTexel=min(ivec2(((p*2u+1u)*uvec2(captureSize))/(uvec2(width,height)*2u)),captureSize-1);
+    vec2 uv=(vec2(captureTexel)+.5)/vec2(captureSize);
+    vec4 normalDepth=texelFetch(SurfaceNormal,captureTexel,0);
+    vec4 albedoMaterial=texelFetch(SurfaceAlbedo,captureTexel,0);
+    vec4 lighting=vec4(0),reflection=vec4(0);
+    if(dot(normalDepth.xyz,normalDepth.xyz)>.25 && normalDepth.w>=0.0 && normalDepth.w<1.0) {
+        // The paired RayCamera inverses include the same bob/hurt perspective eye shift.
+        float clipDepth=Viewport.z>.5?normalDepth.w:normalDepth.w*2.0-1.0;
+        vec4 local=InverseProjection*vec4(uv*2.0-1.0,clipDepth,1.0);
+        vec3 pos=Camera.xyz+(InverseView*vec4(local.xyz/local.w,1.0)).xyz;
+        vec3 eye=Camera.xyz+InverseView[3].xyz;
+        vec3 incoming=normalize(pos-eye);
+        vec3 normal=normalize(normalDepth.xyz);
+        if(dot(normal,incoming)>0.0) normal=-normal;
+        float visibility=sunVisibility(pos,normal);
+        float diffuse=max(dot(normal,normalize(Sun.xyz)),0.0);
+        vec3 irradiance=vec3(max(Options.x,0.0)+diffuse*max(Sun.w,0.0)*visibility);
+        if(Options.y>0.0) {
+            vec3 tangent=normalize(abs(normal.y)<.9?cross(normal,vec3(0,1,0)):cross(normal,vec3(1,0,0)));
+            vec3 bitangent=cross(normal,tangent);
+            vec3 diffuseBounce=vec3(0);
+            float seed=dot(floor((pos.xz+Options.zw)*4.0),vec2(17,59));
+            for(int j=0;j<4;j++) {
+                float a=6.2831853*(float(j)+hash(seed))/4.0;
+                float r=sqrt((float(j)+.5)/4.0);
+                vec3 bounce=normalize(tangent*cos(a)*r+bitangent*sin(a)*r+normal*sqrt(1.0-r*r));
+                Hit secondary=trace(pos+normal*.035,bounce,12.0);
+                if(secondary.found) {
+                    vec3 secondaryPos=pos+normal*.035+bounce*secondary.distance;
+                    vec3 secondaryNormal=hitNormal(secondary,bounce);
+                    diffuseBounce+=linearSurface(secondary)*(sunIrradiance(secondaryPos,secondaryNormal)
+                        +vec3(triangles[secondary.primitive].uv2.w*.45));
+                } else diffuseBounce+=vec3(.10,.15,.22)*(max(Options.x,0.0)/.45);
+            }
+            irradiance+=diffuseBounce*(Options.y*.25);
+        }
+        lighting=vec4(irradiance,visibility);
+        int materialClass=int(floor(albedoMaterial.a+.001));
+        float roughness=clamp(fract(albedoMaterial.a)*2.0,0.0,1.0);
+        if(materialClass==4 || roughness<.95) {
+            vec3 reflected=normalize(reflect(incoming,normal));
+            Hit reflectedHit=trace(pos+normal*.035,reflected,96.0);
+            if(reflectedHit.found) {
+                vec3 hitPos=pos+normal*.035+reflected*reflectedHit.distance;
+                vec3 n=hitNormal(reflectedHit,reflected);
+                vec3 emission=vec3(triangles[reflectedHit.primitive].uv2.w*.45);
+                reflection=vec4(linearSurface(reflectedHit)*(sunIrradiance(hitPos,n)+emission),1);
+            }
+        }
+    }
+    pixels[i*2]=packHalf2x16(lighting.xy);pixels[i*2+1]=packHalf2x16(lighting.zw);
+    uint reflectionBase=(count*2+3)&~3u;
+    pixels[reflectionBase+i*2]=packHalf2x16(reflection.xy);
+    pixels[reflectionBase+i*2+1]=packHalf2x16(reflection.zw);
+}

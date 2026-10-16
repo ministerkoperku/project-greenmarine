@@ -1,0 +1,161 @@
+plugins {
+    id 'net.fabricmc.fabric-loom' version '1.18.2'
+}
+
+version = project.mod_version
+group = project.maven_group
+base { archivesName = 'greenmarine' }
+repositories { mavenCentral() }
+
+def fullpackIntegration = providers.gradleProperty('fullpackIntegration').map { it.toBoolean() }.getOrElse(false)
+def runtimeProbe = providers.gradleProperty('runtimeProbe').isPresent()
+if (runtimeProbe) {
+    sourceSets {
+        probe {
+            java.setSrcDirs(['src/probe/java'])
+            resources.setSrcDirs(['src/probe/resources'])
+            compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+            runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+        }
+    }
+}
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation include('org.luaj:luaj-jse:3.0.1')
+    testImplementation platform('org.junit:junit-bom:5.12.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    if (fullpackIntegration) {
+        def koperlibVersion = providers.gradleProperty('koperlibVersion').getOrElse('0.1.1-alpha')
+        compileOnly files("../koperlib/build/libs/koperlib-core-${koperlibVersion}.jar",
+            "../koperlib/build/libs/koperlib-fullpack-${koperlibVersion}.jar")
+    }
+}
+if (fullpackIntegration) {
+    sourceSets.main.java.srcDir 'src/fullpack/java'
+    base { archivesName = 'greenmarine-fullpack' }
+}
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+    withSourcesJar()
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+tasks.named('test') { useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED' }
+tasks.register('benchmarkLights', JavaExec) {
+    dependsOn 'testClasses'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.koper.greenmarine.client.LightPerformanceProbe'
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(25) }
+}
+processResources {
+    dependsOn 'buildNative'
+    from('engine/target/release/libgreenmarine_engine.so') { into 'native/linux-x86_64' }
+    inputs.property 'version', project.version
+    inputs.property 'fullpackIntegration', fullpackIntegration
+    filesMatching('fabric.mod.json') {
+        expand version: project.version
+    }
+    doLast {
+        if (fullpackIntegration) {
+            def metadataFile = layout.buildDirectory.file('resources/main/fabric.mod.json').get().asFile
+            def metadata = new groovy.json.JsonSlurper().parse(metadataFile)
+            metadata.entrypoints['koperlib-fullpack-addon'] = ['com.koper.greenmarine.compat.fullpack.GreenFullpackAddon']
+            metadataFile.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata))
+        }
+    }
+}
+
+tasks.register('compileRayShader', Exec) {
+    commandLine 'glslangValidator', '-V', '--target-env', 'vulkan1.2', 'engine/shaders/world_rt.comp', '-o', 'engine/shaders/world_rt.spv'
+    inputs.file 'engine/shaders/world_rt.comp'
+    outputs.file 'engine/shaders/world_rt.spv'
+}
+tasks.register('compileSurfaceRayShader', Exec) {
+    commandLine 'glslangValidator', '-V', '--target-env', 'vulkan1.2', 'engine/shaders/surface_rt.comp', '-o', 'engine/shaders/surface_rt.spv'
+    inputs.file 'engine/shaders/surface_rt.comp'
+    outputs.file 'engine/shaders/surface_rt.spv'
+}
+tasks.register('solsticeShaderpack', Zip) {
+    archiveFileName = "solstice-rt-${project.version}.zip"
+    destinationDirectory = layout.buildDirectory.dir('shaderpacks')
+    from('examples/solstice-rt')
+    from('src/main/resources/assets/greenmarine/shaders/core') {
+        include 'solstice_*.fsh', 'solstice_*.vsh'
+        into 'assets/greenmarine/shaders/core'
+    }
+    from('src/main/resources/assets/greenmarine/shaders/include') {
+        include 'solstice*.glsl', 'environment.glsl', 'surface_rays.glsl', 'history.glsl', 'frame.glsl', 'surface.glsl', 'rays.glsl'
+        into 'assets/greenmarine/shaders/include'
+    }
+}
+tasks.register('exampleShaderpack', Zip) {
+    archiveFileName = "aurora-rt-example-${project.version}.zip"
+    destinationDirectory = layout.buildDirectory.dir('shaderpacks')
+    from('examples/aurora-rt')
+    from('src/main/resources/assets/greenmarine/shaders/core') {
+        include 'aurora_rt.fsh', 'aurora_fallback.fsh'
+        into 'assets/aurora/shaders/core'
+    }
+}
+tasks.register('seabreezeShaderpack', Zip) {
+    archiveFileName = "seabreeze-world-shaders-${project.version}.zip"
+    destinationDirectory = layout.buildDirectory.dir('shaderpacks')
+    from('examples/seabreeze')
+    from('src/main/resources/assets/greenmarine/shaders/core') {
+        include 'seabreeze_*.fsh', 'seabreeze_*.vsh'
+        into 'assets/greenmarine/shaders/core'
+    }
+    from('src/main/resources/assets/greenmarine/shaders/include') {
+        include 'frame.glsl', 'surface.glsl', 'rays.glsl'
+        into 'assets/greenmarine/shaders/include'
+    }
+}
+tasks.register('prismarineCorrectedShaderpack', Zip) {
+    archiveFileName = "prismarine-showcase-corrected-${project.version}.zip"
+    destinationDirectory = layout.buildDirectory.dir('shaderpacks')
+    from('examples/prismarine-fixed')
+}
+tasks.named('build') { dependsOn 'exampleShaderpack', 'seabreezeShaderpack', 'prismarineCorrectedShaderpack', 'solsticeShaderpack' }
+tasks.register('buildNative', Exec) {
+    dependsOn 'compileRayShader', 'compileSurfaceRayShader'
+    workingDir 'engine'
+    commandLine 'cargo', 'build', '--release', '--locked'
+    inputs.files fileTree('engine/src'), fileTree('engine/shaders'), file('engine/Cargo.toml'), file('engine/Cargo.lock')
+    outputs.file 'engine/target/release/libgreenmarine_engine.so'
+}
+loom {
+    mods {
+        greenmarine { sourceSet sourceSets.main }
+        if (runtimeProbe) greenmarine_probe { sourceSet sourceSets.probe }
+    }
+    runs {
+        client {
+            programArgs '--username', 'GreenMarineDev'
+            vmArg '--enable-native-access=ALL-UNNAMED'
+            if (providers.gradleProperty('nativeDisabled').isPresent()) vmArg '-Dgreenmarine.native.disable=true'
+            if (providers.gradleProperty('oitProbe').isPresent()) vmArg '-Dgreenmarine.probe.oit=true'
+            if (providers.gradleProperty('dynamicRayProbe').isPresent()) vmArg '-Dgreenmarine.probe.dynamic_rays=true'
+            if (providers.gradleProperty('performanceProbe').isPresent()) vmArg '-Dgreenmarine.probe.performance=true'
+            if (providers.gradleProperty('namedPassProbe').isPresent()) vmArg '-Dgreenmarine.probe.named_passes=true'
+            if (providers.gradleProperty('historyCompatibilityProbe').isPresent()) vmArg '-Dgreenmarine.probe.history_compatibility=true'
+            if (providers.gradleProperty('solsticeProbe').isPresent()) vmArg '-Dgreenmarine.probe.solstice=true'
+            if (providers.gradleProperty('worldProgramsProbe').isPresent()) vmArg '-Dgreenmarine.probe.world_programs=true'
+            if (providers.gradleProperty('hardwareRtProbe').isPresent()) vmArg '-Dgreenmarine.probe.hardware_rt=true'
+            if (providers.gradleProperty('renderApiProbe').isPresent()) vmArg '-Dgreenmarine.probe.render_api=true'
+            if (providers.gradleProperty('voxelProbe').isPresent()) vmArg '-Dgreenmarine.probe.voxel=true'
+            if (providers.gradleProperty('worldLightingProbe').isPresent()) vmArg '-Dgreenmarine.probe.world=true'
+            if (providers.gradleProperty('worldRestoreMode').isPresent()) vmArg '-Dgreenmarine.probe.restore_mode=' + providers.gradleProperty('worldRestoreMode').get()
+            runDir 'run'
+            programArgs '--graphicsBackend', providers.gradleProperty('graphicsBackend').getOrElse('vulkan')
+            if (providers.gradleProperty('demo').isPresent()) programArgs '--demo'
+            if (runtimeProbe) {
+                source sourceSets.probe
+                programArgs '--demo', '--width', '960', '--height', '540'
+                if (providers.gradleProperty('probeOutput').isPresent()) {
+                    vmArg '-Dgreenmarine.probe.output=' + providers.gradleProperty('probeOutput').get()
+                }
+            }
+        }
+    }
+}

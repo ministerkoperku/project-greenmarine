@@ -1,0 +1,94 @@
+{
+  "schema": 1,
+  "id": "prismarine:showcase_fixed",
+  "name": "Prismarine Showcase Corrected",
+  "script": "prismarine_fixed:greenmarine/scripts/showcase.lua",
+  "parameters": {
+    "exposure": {
+      "default": 1.05,
+      "min": 0.25,
+      "max": 4.0
+    },
+    "saturation": {
+      "default": 1.1,
+      "min": 0.0,
+      "max": 2.0
+    },
+    "warmth": {
+      "default": 0.1,
+      "min": 0.0,
+      "max": 1.0
+    },
+    "vignette": {
+      "default": 0.22,
+      "min": 0.0,
+      "max": 1.0
+    },
+    "bloom": {
+      "default": 0.22,
+      "min": 0.0,
+      "max": 2.0
+    },
+    "blend": {
+      "default": 0.55,
+      "min": 0.0,
+      "max": 1.0
+    },
+    "shadow": {
+      "default": 0.55,
+      "min": 0.0,
+      "max": 1.0
+    },
+    "ambient": {
+      "default": 0.02,
+      "min": 0.0,
+      "max": 0.5
+    },
+    "fog": {
+      "default": 0.12,
+      "min": 0.0,
+      "max": 1.0
+    },
+    "diagnostic": {
+      "default": 0.0,
+      "min": 0.0,
+      "max": 5.0
+    }
+  },
+  "passes": [
+    {
+      "name": "lightmap",
+      "stage": "lightmap",
+      "fragment": "prismarine_fixed:core/lightmap"
+    },
+    {
+      "name": "voxel",
+      "fragment": "prismarine_fixed:core/voxel",
+      "fallback": "prismarine_fixed:core/zero",
+      "requires": "voxel_rt",
+      "scale": 0.5,
+      "minQuality": "high",
+      "format": "rgba16f"
+    },
+    {
+      "name": "hardware",
+      "fragment": "prismarine_fixed:core/hardware",
+      "fallback": "prismarine_fixed:core/pass",
+      "requires": "hardware_rt",
+      "scale": 0.5,
+      "minQuality": "high",
+      "format": "rgba16f"
+    },
+    {
+      "name": "bloom",
+      "fragment": "prismarine_fixed:core/bloom",
+      "scale": 0.5,
+      "minQuality": "high",
+      "format": "rgba16f"
+    },
+    {
+      "name": "compose",
+      "fragment": "prismarine_fixed:core/compose"
+    }
+  ]
+}

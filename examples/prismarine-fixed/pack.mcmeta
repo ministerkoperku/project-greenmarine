@@ -1,0 +1,13 @@
+{
+  "pack": {
+    "description": "Prismarine Showcase Corrected: irradiance composition, voxel GI and bloom for GreenMarine 0.6+",
+    "min_format": [
+      97,
+      1
+    ],
+    "max_format": [
+      97,
+      1
+    ]
+  }
+}

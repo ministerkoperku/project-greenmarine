@@ -1,0 +1,11 @@
+/.gradle/
+/build/
+/run/
+/engine/target/
+/.superpowers/
+/tools/__pycache__/
+*.log
+/logs/
+/.native-test-*/
+# profiles, screenshots and results of test runs, hundreds of MB, kept locally
+/development/evidence/

@@ -1,0 +1,193 @@
+{
+  "schema": 1,
+  "id": "greenmarine:solstice_rt",
+  "name": "Solstice RT",
+  "parameters": {
+    "exposure": {
+      "default": 1.12,
+      "min": 0.25,
+      "max": 3
+    },
+    "saturation": {
+      "default": 1.03,
+      "min": 0,
+      "max": 1.8
+    },
+    "waves": {
+      "default": 1,
+      "min": 0,
+      "max": 2
+    },
+    "refraction": {
+      "default": 1,
+      "min": 0,
+      "max": 2
+    },
+    "absorption": {
+      "default": 1,
+      "min": 0,
+      "max": 3
+    },
+    "waterOpacity": {
+      "default": 0.9,
+      "min": 0.1,
+      "max": 1
+    },
+    "reflection": {
+      "default": 1,
+      "min": 0,
+      "max": 1
+    },
+    "sunStrength": {
+      "default": 1,
+      "min": 0,
+      "max": 2
+    },
+    "ambient": {
+      "default": 1,
+      "min": 0,
+      "max": 2
+    },
+    "giStrength": {
+      "default": 1,
+      "min": 0,
+      "max": 2
+    },
+    "rayBlend": {
+      "default": 0.85,
+      "min": 0,
+      "max": 1
+    },
+    "fogDensity": {
+      "default": 0.85,
+      "min": 0,
+      "max": 3
+    },
+    "fogHeight": {
+      "default": 80,
+      "min": -64,
+      "max": 320
+    },
+    "cloudCoverage": {
+      "default": 0.7,
+      "min": 0,
+      "max": 1.5
+    },
+    "cloudDetail": {
+      "default": 1,
+      "min": 0.2,
+      "max": 3
+    },
+    "cloudSpeed": {
+      "default": 1,
+      "min": 0,
+      "max": 3
+    },
+    "bloom": {
+      "default": 0.12,
+      "min": 0,
+      "max": 1
+    },
+    "bloomThreshold": {
+      "default": 0.65,
+      "min": 0.1,
+      "max": 3
+    },
+    "wetness": {
+      "default": 1,
+      "min": 0,
+      "max": 1
+    },
+    "puddles": {
+      "default": 1,
+      "min": 0,
+      "max": 1
+    },
+    "emission": {
+      "default": 0.35,
+      "min": 0,
+      "max": 2
+    },
+    "nightBrightness": {
+      "default": 1,
+      "min": 0.1,
+      "max": 3
+    },
+    "toneCurve": {
+      "default": 0.75,
+      "min": 0,
+      "max": 1
+    },
+    "waveDiagnostic": {
+      "default": 0,
+      "min": 0,
+      "max": 1
+    },
+    "surfaceDiagnostic": {
+      "default": 0,
+      "min": 0,
+      "max": 2
+    },
+    "skyBrightness": {
+      "default": 1,
+      "min": 0.1,
+      "max": 2
+    },
+    "terrainRoughness": {
+      "default": 0.82,
+      "min": 0.1,
+      "max": 1
+    },
+    "snow": {
+      "default": 0.65,
+      "min": 0,
+      "max": 1
+    }
+  },
+  "passes": [
+    {
+      "name": "solstice_scene",
+      "fragment": "greenmarine:core/solstice_scene",
+      "format": "rgba16f"
+    },
+    {
+      "name": "solstice_bloom",
+      "fragment": "greenmarine:core/solstice_bloom",
+      "scale": 0.5,
+      "format": "rgba16f",
+      "minQuality": "medium",
+      "inputs": {
+        "CachedColorSampler": "solstice_scene"
+      }
+    },
+    {
+      "name": "solstice_compose",
+      "fragment": "greenmarine:core/solstice_compose",
+      "requires": "hardware_rt",
+      "fallback": "greenmarine:core/solstice_compose",
+      "history": true,
+      "lightingHistory": true,
+      "inputs": {
+        "SolsticeScene": "solstice_scene"
+      }
+    }
+  ],
+  "programs": [
+    {
+      "target": "terrain",
+      "vertex": "greenmarine:core/solstice_terrain",
+      "fragment": "greenmarine:core/solstice_terrain",
+      "surface": "greenmarine:core/solstice_surface",
+      "worldRays": true,
+      "surfaceOnly": true
+    },
+    {
+      "target": "sky",
+      "fragment": "greenmarine:core/solstice_sky"
+    },
+    {
+      "target": "clouds",
+      "fragment": "greenmarine:core/solstice_clouds"
+    }
+  ]
+}

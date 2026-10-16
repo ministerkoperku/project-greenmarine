@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "greenmarine",
+  "version": "${version}",
+  "name": "GreenMarine",
+  "description": "Standalone rendering and programmable visual effects prototype.",
+  "authors": ["Koper"],
+  "environment": "*",
+  "mixins": ["greenmarine.mixins.json"],
+  "entrypoints": {
+    "main": ["com.koper.greenmarine.GreenMarine"],
+    "client": ["com.koper.greenmarine.client.GreenMarineClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "26.3",
+    "java": ">=25"
+  },
+  "suggests": {"koperlib_fullpack": "*", "sodium": "*"}
+}
