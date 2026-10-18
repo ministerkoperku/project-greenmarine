@@ -92,16 +92,27 @@ public final class WorldPrograms {
         if(!enabled() || !(original instanceof FrontendRenderPipeline front) || OWNED.contains(original))return original;
         var variants=captureMode?CAPTURE_VARIANTS:VARIANTS;var cached=variants.get(front.name());if(cached!=null)return cached;
         if(HOST.isEmpty()) {for(var pipeline:RenderPipelines.requiredPipelines())HOST.put(pipeline.getLocation().toString(),pipeline);for(var pipeline:RenderPipelines.optionalPipelines())HOST.put(pipeline.getLocation().toString(),pipeline);}
-        var host=HOST.get(front.name());if(host==null)return original;
-        var target=target(host);if(target==null)return original;
+        var sodiumHost=SodiumCompatibility.find(front.name());
+        var host=sodiumHost!=null?sodiumHost:HOST.get(front.name());
+        if(host==null) {
+            if(captureMode)throw new IllegalStateException("Unsupported terrain material capture pipeline: "+front.name());
+            return original;
+        }
+        boolean sodium=sodiumHost!=null;
+        var target=sodium?PackProgram.Target.TERRAIN:target(host);if(target==null)return original;
         if(captureMode && target!=PackProgram.Target.TERRAIN) throw new IllegalStateException("Non-terrain draw in surface replay");
         var program=ShaderRuntime.active().definition().programs().stream().filter(p->p.target()==target).findFirst().orElse(null);
         if(program==null)return original;
+        if(sodium && !SodiumCompatibility.supports(program)) {
+            if(captureMode)throw new IllegalStateException("Unsupported Sodium terrain pack program: "+program.fragment());
+            return original;
+        }
         try {
             return variants.computeIfAbsent(front.name(),key->{
                 var location=Identifier.fromNamespaceAndPath("greenmarine",(captureMode?"surface/":"world/")+Integer.toUnsignedString(key.hashCode()));
-                var definition=captureMode?WorldPipeline.capture(host,program,location):WorldPipeline.decorate(host,program,location);
-                try(var source=new WorldShaders(ShaderRuntime.active())) {
+                var compatibleHost=sodium?SodiumCompatibility.prepare(host):host;
+                var definition=captureMode?WorldPipeline.capture(compatibleHost,program,location):WorldPipeline.decorate(compatibleHost,program,location);
+                try(var source=new WorldShaders(ShaderRuntime.active(),sodium)) {
                     var compiled=RenderSystem.getDevice().compilePipeline(definition,source,Runnable::run).join().finishCompile();
                     if(compiled==null)throw new IllegalArgumentException("Unable to compile world program: "+key);
                     OWNED.add(compiled);return compiled;

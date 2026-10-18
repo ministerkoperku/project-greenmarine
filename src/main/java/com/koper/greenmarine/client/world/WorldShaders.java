@@ -10,16 +10,20 @@ import java.util.*;
 
 final class WorldShaders implements BinaryShaderSource {
     private final PackCatalog.LoadedPack pack;
+    private final boolean sodium;
     private final Map<Identifier,CachedIncludeSource> includes=new HashMap<>();
-    WorldShaders(PackCatalog.LoadedPack pack) {this.pack=pack;}
+    WorldShaders(PackCatalog.LoadedPack pack) {this(pack,false);}
+    WorldShaders(PackCatalog.LoadedPack pack,boolean sodium) {this.pack=pack;this.sodium=sodium;}
     @Override public String getShader(Identifier id,ShaderType type) {
         var text=pack.sources().get((type==ShaderType.VERTEX?"vertex|":"")+id);
-        return text!=null?text:resource(id,"shaders/",type==ShaderType.VERTEX?".vsh":".fsh");
+        if(text==null)text=resource(id,"shaders/",type==ShaderType.VERTEX?".vsh":".fsh");
+        return text!=null && sodium?SodiumShaderAdapter.shader(text,type):text;
     }
     @Override public CachedIncludeSource getInclude(Identifier id) {
         return includes.computeIfAbsent(id,key->{
             var text=pack.sources().get("include|"+key);
             if(text==null) text=resource(key,"shaders/include/","");
+            if(text!=null && sodium)text=SodiumShaderAdapter.include(text);
             return text==null?CachedIncludeSource.createError("Missing world shader include: "+key):CachedIncludeSource.create(key,text);
         });
     }

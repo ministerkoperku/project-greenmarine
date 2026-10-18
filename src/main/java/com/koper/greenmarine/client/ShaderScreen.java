@@ -8,7 +8,10 @@ import net.minecraft.network.chat.Component;
 import java.util.ArrayList;
 
 public final class ShaderScreen extends Screen {
-    public ShaderScreen() { super(Component.literal("GreenMarine Shaders")); }
+    private final Screen parent;
+    public ShaderScreen() { this(null); }
+    public ShaderScreen(Screen parent) { super(Component.literal("GreenMarine Shaders")); this.parent = parent; }
+    @Override public void onClose() { minecraft.gui.setScreen(parent); }
     @Override protected void init() {
         var settings = ShaderRuntime.settings(); int x = width / 2 - 130, y = Math.max(45,height/2-90);
         addRenderableWidget(Button.builder(Component.literal("Pack: "+settings.pack()), button -> {

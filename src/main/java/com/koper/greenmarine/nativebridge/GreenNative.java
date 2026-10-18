@@ -8,7 +8,6 @@ import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Locale;
 import static java.lang.foreign.ValueLayout.*;
 
 public final class GreenNative implements AutoCloseable {
@@ -28,7 +27,10 @@ public final class GreenNative implements AutoCloseable {
         var engine = new GreenNative("Native library unavailable");
         Arena scope = Arena.ofShared();
         try {
-            var symbols = SymbolLookup.libraryLookup(path.toAbsolutePath(), scope);
+            var librarySymbols = SymbolLookup.libraryLookup(path.toAbsolutePath(), NativePlatform.libraryArena(scope));
+            // Android code stays mapped, but downcalls must still expire with this engine.
+            SymbolLookup symbols = name -> librarySymbols.find(name)
+                .map(address -> address.reinterpret(0, scope, null));
             var linker = Linker.nativeLinker();
             var abi = linker.downcallHandle(symbols.find("greenmarine_abi_version").orElseThrow(), FunctionDescriptor.of(JAVA_INT));
             checkAbi((int) abi.invokeExact());
@@ -49,20 +51,21 @@ public final class GreenNative implements AutoCloseable {
 
     public static GreenNative openBundled() {
         if (Boolean.getBoolean("greenmarine.native.disable")) return new GreenNative("Native library disabled by launch option");
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
-        if (!os.contains("linux") || !(arch.equals("amd64") || arch.equals("x86_64"))) {
-            return new GreenNative("No bundled native library for " + os + "/" + arch);
+        String platform = NativePlatform.current();
+        if (platform == null) {
+            return new GreenNative("No bundled native library for " + System.getProperty("os.name") + "/" + System.getProperty("os.arch"));
         }
+        String resource = "/native/" + platform + "/libgreenmarine_engine.so";
         Path directory = null;
-        try (var stream = GreenNative.class.getResourceAsStream("/native/linux-x86_64/libgreenmarine_engine.so")) {
-            if (stream == null) return new GreenNative("Bundled native library missing");
+        try (var stream = GreenNative.class.getResourceAsStream(resource)) {
+            if (stream == null) return new GreenNative("Bundled native library missing: " + resource);
             directory = Files.createTempDirectory("greenmarine-native-");
             Path library = directory.resolve("libgreenmarine_engine.so");
             Files.copy(stream, library);
             var engine = open(library);
             engine.extracted = library;
             if (!engine.available()) engine.cleanExtracted();
+            engine.status += " [" + platform + "]";
             return engine;
         } catch (IOException error) {
             if (directory != null) {

@@ -9,6 +9,23 @@ repositories { mavenCentral() }
 
 def fullpackIntegration = providers.gradleProperty('fullpackIntegration').map { it.toBoolean() }.getOrElse(false)
 def runtimeProbe = providers.gradleProperty('runtimeProbe').isPresent()
+// Cargo's host describes the process libc too; os.name/os.arch cannot distinguish
+// Android Bionic from a Linux glibc process running inside proot on that phone.
+def rustHost = providers.exec { commandLine 'rustc', '-vV' }.standardOutput.asText.get()
+    .readLines().find { it.startsWith('host: ') }?.substring(6)?.trim()
+def nativeTarget = providers.gradleProperty('nativeTarget').getOrElse(rustHost ?: '')
+def nativePlatforms = [
+    'x86_64-unknown-linux-gnu': 'linux-x86_64',
+    'aarch64-unknown-linux-gnu': 'linux-aarch64',
+    'aarch64-linux-android': 'android-aarch64'
+]
+if (!nativePlatforms.containsKey(nativeTarget)) {
+    throw new GradleException("Unsupported nativeTarget '${nativeTarget}'. Supported targets: ${nativePlatforms.keySet()}")
+}
+def androidNative = providers.gradleProperty('androidNative').map { it.toBoolean() }.getOrElse(false)
+def extraAndroidNative = androidNative && nativeTarget != 'aarch64-linux-android'
+def nativeLibrary = "engine/target/${nativeTarget}/release/libgreenmarine_engine.so"
+def androidLibrary = 'engine/target/aarch64-linux-android/release/libgreenmarine_engine.so'
 if (runtimeProbe) {
     sourceSets {
         probe {
@@ -41,7 +58,12 @@ java {
     withSourcesJar()
 }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
-tasks.named('test') { useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED' }
+tasks.named('test') {
+    useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED'
+    def sodiumResources = providers.environmentVariable('GREENMARINE_TEST_SODIUM_RESOURCES')
+    inputs.property 'sodiumShaderResources', sodiumResources.getOrElse('unavailable')
+    if (sodiumResources.isPresent()) inputs.dir(sodiumResources.get()).withPropertyName('sodiumShaders')
+}
 tasks.register('benchmarkLights', JavaExec) {
     dependsOn 'testClasses'
     classpath = sourceSets.test.runtimeClasspath
@@ -50,7 +72,15 @@ tasks.register('benchmarkLights', JavaExec) {
 }
 processResources {
     dependsOn 'buildNative'
-    from('engine/target/release/libgreenmarine_engine.so') { into 'native/linux-x86_64' }
+    from(nativeLibrary) { into "native/${nativePlatforms[nativeTarget]}" }
+    if (extraAndroidNative) {
+        dependsOn 'buildAndroidNative'
+        from(androidLibrary) { into 'native/android-aarch64' }
+    }
+    inputs.property 'nativeTarget', nativeTarget
+    inputs.property 'androidNative', androidNative
+    // ProcessResources is a Copy task: remove previous target outputs on switches.
+    doFirst { delete layout.buildDirectory.dir('resources/main/native') }
     inputs.property 'version', project.version
     inputs.property 'fullpackIntegration', fullpackIntegration
     filesMatching('fabric.mod.json') {
@@ -120,9 +150,29 @@ tasks.named('build') { dependsOn 'exampleShaderpack', 'seabreezeShaderpack', 'pr
 tasks.register('buildNative', Exec) {
     dependsOn 'compileRayShader', 'compileSurfaceRayShader'
     workingDir 'engine'
-    commandLine 'cargo', 'build', '--release', '--locked'
+    commandLine 'cargo', 'build', '--release', '--locked', '--target', nativeTarget
+    def androidLinker = providers.gradleProperty('androidLinker')
+    if (nativeTarget == 'aarch64-linux-android' && androidLinker.isPresent()) {
+        environment 'CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER', androidLinker.get()
+    }
+    inputs.property 'nativeTarget', nativeTarget
+    inputs.property 'androidLinker', nativeTarget == 'aarch64-linux-android' ? androidLinker.getOrElse('cargo-environment') : ''
+    inputs.property 'rustflags', providers.environmentVariable('RUSTFLAGS').getOrElse('')
+    inputs.property 'targetRustflags', providers.environmentVariable('CARGO_TARGET_' + nativeTarget.toUpperCase(Locale.ROOT).replace('-', '_') + '_RUSTFLAGS').getOrElse('')
     inputs.files fileTree('engine/src'), fileTree('engine/shaders'), file('engine/Cargo.toml'), file('engine/Cargo.lock')
-    outputs.file 'engine/target/release/libgreenmarine_engine.so'
+    outputs.file nativeLibrary
+}
+tasks.register('buildAndroidNative', Exec) {
+    dependsOn 'compileRayShader', 'compileSurfaceRayShader'
+    workingDir 'engine'
+    commandLine 'cargo', 'build', '--release', '--locked', '--target', 'aarch64-linux-android'
+    def androidLinker = providers.gradleProperty('androidLinker')
+    if (androidLinker.isPresent()) environment 'CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER', androidLinker.get()
+    inputs.property 'androidLinker', androidLinker.getOrElse('cargo-environment')
+    inputs.property 'rustflags', providers.environmentVariable('RUSTFLAGS').getOrElse('')
+    inputs.property 'targetRustflags', providers.environmentVariable('CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS').getOrElse('')
+    inputs.files fileTree('engine/src'), fileTree('engine/shaders'), file('engine/Cargo.toml'), file('engine/Cargo.lock')
+    outputs.file androidLibrary
 }
 loom {
     mods {

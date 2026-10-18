@@ -10,10 +10,12 @@
     "BuiltInPackSourceMixin",
     "GameRendererMixin",
     "MinecraftTickMixin",
+    "PauseScreenMixin",
     "LightmapMixin",
     "PackSpirvMixin",
     "VulkanRtFeaturesMixin",
     "WorldRenderPassMixin",
+    "WorldPipelineRegistryMixin",
     "WorldSubmitMixin",
     "WorldTransparencyMixin"
   ],

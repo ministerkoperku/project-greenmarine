@@ -20,8 +20,12 @@ Geometry updates and measured shadow freshness are covered in
 
 ## Installation
 
+Sodium 0.9.3-alpha.1 terrain adaptation for built-in Solstice/Seabreeze is
+available in 0.8.2; see [Sodium compatibility and FPS expectations](SODIUM.md)
+for scope and the phone acceptance procedure.
+
 Use Java **25**, Fabric Loader **0.19.5+** and Minecraft **26.3**. Install
-`greenmarine-0.8.0-prototype.jar`. Fabric API, KoperLib and Sodium are optional.
+`greenmarine-0.8.2-prototype.jar`. Fabric API, KoperLib and Sodium are optional.
 The Fullpack variant replaces the base jar; install one GreenMarine jar at a
 time. Fullpack's own dependencies apply if you install Fullpack.
 
@@ -31,7 +35,10 @@ Development `./gradlew runClient` selects Vulkan by default; use
 host graphics device before a mod can use it; GreenMarine does not switch an
 already created device.
 
-The bundled Rust library currently supports Linux x86_64. Add
+Native builds select Linux x86_64, Linux ARM64 or Android ARM64 explicitly;
+the Android export includes separate Bionic and Linux ARM64 libraries.
+See [Android / Zalith installation](ANDROID-ZALITH.md) for build options,
+touch controls and the remaining device acceptance checks. Add
 `--enable-native-access=ALL-UNNAMED` to JVM arguments to use it. If it is absent,
 unsupported or disabled, animation falls back to Java and portable rendering
 continues. This removes a native-library requirement, but Windows/macOS and
@@ -44,6 +51,7 @@ queue, atlas and submission ownership. See [hardware RT](HARDWARE-RT.md).
 
 - **F6:** select pack, quality, ray-lighting mode and profiling; **Pack parameters**
   opens paged sliders with live preview and per-pack persistence.
+- **Pause menu → GreenMarine:** open the same settings with a clickable/touch entry.
 - **F7:** place/reposition the demonstration point light at a targeted surface
   within six blocks, or three blocks ahead. It stays fixed when you move.
 - **F8:** toggle GreenMarine world effects; hand/HUD keep ordinary rendering.

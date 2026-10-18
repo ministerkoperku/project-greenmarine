@@ -9,6 +9,15 @@ Rust native processing has a Java fallback. Installation, controls and authoring
 [Rendering API guide](docs/RENDERING-API.md). Current evidence and remaining work: [development/PROGRESS.md](development/PROGRESS.md).
 The original owner concept is preserved in `readme.txt`.
 
+0.8.1 adds distinct Android/Bionic and Linux ARM64 native bundles plus a
+touch-accessible pause-menu settings entry. [Android / Zalith guide](docs/ANDROID-ZALITH.md),
+[API roadmap and comparison](docs/API-ROADMAP.md). Android gameplay acceptance
+remains separate from native/build verification.
+
+0.8.2 adds a targeted Sodium terrain adapter for built-in Solstice/Seabreeze,
+preserving packed geometry and OIT while fixing the material replay pipeline
+mismatch. [Compatibility scope, testing and FPS expectations](docs/SODIUM.md).
+
 Seabreeze adds actual terrain/water/sky/cloud shaders; a separate corrected Prismarine
 pack fixes additive-irradiance whiteness. [World-program API and examples](docs/WORLD-PROGRAMS.md).
 
