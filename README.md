@@ -48,7 +48,7 @@ Press **F6** (or Pause → GreenMarine) and pick a pack. Full guide:
 | Ray tracing | [Hardware RT](docs/HARDWARE-RT.md), [Player in reflections](docs/ACTOR-REFLECTIONS.md), [Dynamic scenes](docs/DYNAMIC-RAY-SCENES.md) |
 | Writing packs | [Shaderpacks](docs/SHADERPACKS.md), [External packs](docs/EXTERNAL-PACKS.md), [World programs](docs/WORLD-PROGRAMS.md), [Surface rendering](docs/SURFACE-RENDERING.md), [Materials](docs/MATERIAL-EXTENSION.md) |
 | Mod API | [Rendering API](docs/RENDERING-API.md), [Indexed meshes](docs/INDEXED-MESHES.md), [Graph allocation](docs/GRAPH-ALLOCATION.md), [External renderers](docs/EXTERNAL-RENDERERS.md), [Settings UI](docs/SETTINGS-UI.md) |
-| Project | [Development](docs/DEVELOPMENT.md), [Roadmap](docs/API-ROADMAP.md), [Changelog](CHANGELOG.md), [Third-party notices](docs/THIRD-PARTY.md) |
+| Project | [Planned features](PLANNED-FEATURES.md), [Development](docs/DEVELOPMENT.md), [Roadmap](docs/API-ROADMAP.md), [Changelog](CHANGELOG.md), [Third-party notices](docs/THIRD-PARTY.md) |
 
 ## Building
 
@@ -65,4 +65,4 @@ Needs Java 25, Rust and `glslangValidator`. Android builds and GPU tests:
 No license has been chosen yet; until one is, all rights are reserved by the author.
 Bundled third-party components keep their own licenses
 ([third-party notices](docs/THIRD-PARTY.md)). `readme.txt` is the original project
-concept, kept as written.
+concept, kept as written; [planned features](PLANNED-FEATURES.md) is its structured version.
