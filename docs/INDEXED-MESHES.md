@@ -1,4 +1,4 @@
-# Indexed and instanced meshes (0.9.0)
+# Indexed and instanced meshes
 
 `RenderSession.indexedMesh` uploads one per-vertex buffer plus unsigned native-endian
 SHORT/INT indices. Each triangle has three indices. Ranges, stride, count and index

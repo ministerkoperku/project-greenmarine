@@ -212,20 +212,19 @@ that graph, not the frame or adjacent graphs. Disable profiling to close query
 resources. Timestamp support may be unavailable; zero samples means no GPU
 measurement. These are local measurements, not an FPS guarantee.
 
-The accepted Vulkan/OpenGL fixture, captures, timings, resource reuse counts
-and regression evidence are in `development/evidence/render-api/README.md`.
 The example provides albedo, normal and depth for its contributed mesh. Vanilla
 rasterization stays in place; there is no vanilla G-buffer, PBR texture system,
 multi-bounce lighting or FSR4. Native world ray queries and their finite coverage
 are described in [HARDWARE-RT.md](HARDWARE-RT.md).
 
-## Host world programs (0.6)
+## Host world programs
 
 Mods can register shader packs with `PackProgram` declarations to replace selected
 Minecraft world shader stages. `WorldPipeline.decorate` preserves host pipeline state
 and existing uniform slots. `ShaderProgram.source(id,type)` supports matching resource
 ids across vertex/fragment stages. See [world programs](WORLD-PROGRAMS.md).
 
-Surface material and reflection imports plus independent readiness flags are
-additive in 0.7; see [surface rendering API](SURFACE-RENDERING.md). Legacy primary
-ray imports remain independent when a pack explicitly selects surfaceOnly.
+Surface material and reflection imports with independent readiness flags are
+described in [surface rendering API](SURFACE-RENDERING.md); primary ray imports stay
+independent when a pack selects `surfaceOnly`. Mods that render their own geometry
+natively use [external renderers](EXTERNAL-RENDERERS.md).

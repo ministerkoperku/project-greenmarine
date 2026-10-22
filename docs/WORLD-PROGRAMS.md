@@ -1,41 +1,9 @@
-# World shader programs (0.6)
+# World shader programs
 
-## Consistent scene depth (0.8.8)
-
-Enabled GreenMarine effects request Minecraft's `consistentDepthRequired` flag
-before `LevelRenderer` constructs its frame graph. Always-on-top gizmos then
-render into Minecraft's separate gizmo depth attachment and integrate it, rather
-than clearing world depth before GreenMarine post processing. This applies to
-any gizmo producer, including connector overlays, without linking its mod/API.
-Existing host requirements remain enabled when GreenMarine is toggled off.
-Minecraft retains ownership of all gizmo targets and their frame-graph lifetime.
-
-Regression tests cover the enable/disable/re-enable matrix and verify the mixin
-selector/argument against actual 26.3 bytecode. The owner's complete camera-motion
-artifact still requires gameplay confirmation; these tests do not render a game.
-
-## Background stage (0.8.6)
-
-An optional `{"target":"background","vertex":"demo:core/background","fragment":"demo:core/background"}`
-program draws a fullscreen triangle after opaque geometry and before deferred
-classic/OIT transparency. Its color target is the actual host format. Reversed
-depth uses EQUAL against clear depth zero, without depth writes or attachment
-clears, so opaque terrain/entities remain intact. The vertex program must emit
-clip Z 0 for zero-to-one hosts and -1 otherwise (`Context.x`), with W 1.
-The host supplies `MarineFrame`, `MarineSurfaceFrame` and `MarineEnvironment`.
-This stage has no sampled color/depth inputs and rejects ray/surface-capture flags.
-Resource ownership and failure/reset behavior follow the world-program lifecycle.
-
-Solstice uses this stage for its single procedural sky/cloud layer. Its original
-Overworld sky/cloud fragments discard host geometry; other packs and global
-Minecraft cloud settings are unaffected. The scene pass no longer decides sky
-coverage from pixel brightness. Custom background shaders should explicitly gate
-dimensions in which they do not replace the sky.
-
-Schema 1 now optionally declares actual world vertex/fragment programs alongside
-its existing fullscreen and lightmap passes. The original `ShaderPack` constructor,
-parameter order, MarineFrame 288-byte block, existing packs and native ABI remain
-available. Base GreenMarine remains standalone; Fullpack is optional.
+Schema 1 packs can declare world vertex/fragment programs alongside fullscreen and
+lightmap passes. They replace the shaders of Minecraft's own world draws (and
+Sodium's terrain, see [Sodium](SODIUM.md)) while keeping its meshes, sorting and
+submission.
 
 ```json
 {
@@ -115,17 +83,44 @@ The classic path closes the original opaque pass, copies outside it, then draws
 transparency in a separate pass with preserved color/depth and default uniforms.
 OIT already has a corresponding boundary. No shader samples its active framebuffer.
 
-RT dispatch now occurs before world rasterization using the actual submitted camera
+RT dispatch occurs before world rasterization using the actual submitted camera
 projection. `RayLighting` is **linear irradiance**, not already shaded scene color.
 Multiply material albedo by irradiance; adding it directly creates white surfaces.
 Do not divide by dark albedo. Match normal/depth world planes before using local rays,
 and use a shared lighting baseline with a fade at the finite scene boundary.
-Night/weather now affect ambient and non-emitter indirect sky illumination.
+Night/weather affect ambient and non-emitter indirect sky illumination.
+
+## Background stage
+
+An optional `{"target":"background","vertex":"demo:core/background","fragment":"demo:core/background"}`
+program draws a fullscreen triangle after opaque geometry and before deferred
+classic/OIT transparency. Its color target is the actual host format. Reversed
+depth uses EQUAL against clear depth zero, without depth writes or attachment
+clears, so opaque terrain/entities remain intact. The vertex program must emit
+clip Z 0 for zero-to-one hosts and -1 otherwise (`Context.x`), with W 1.
+The host supplies `MarineFrame`, `MarineSurfaceFrame` and `MarineEnvironment`.
+This stage has no sampled color/depth inputs and rejects ray/surface-capture flags.
+Resource ownership and failure/reset behavior follow the world-program lifecycle.
+
+Solstice uses this stage for its procedural sky/cloud layer; its Overworld sky and
+cloud programs discard the host geometry. Custom background shaders should gate
+dimensions in which they do not replace the sky.
+
+## Consistent scene depth
+
+Enabled GreenMarine effects request Minecraft's `consistentDepthRequired` flag
+before `LevelRenderer` constructs its frame graph. Always-on-top gizmos then
+render into Minecraft's separate gizmo depth attachment and integrate it, rather
+than clearing world depth before GreenMarine post processing. This applies to
+any gizmo producer, including connector overlays, without linking its mod/API.
+Existing host requirements remain enabled when GreenMarine is toggled off.
+Minecraft retains ownership of all gizmo targets and their frame-graph lifetime.
+
 
 ## Examples and readiness
 
-**Seabreeze World Shaders** is built in and available as
-`build/shaderpacks/seabreeze-world-shaders-0.6.0-prototype.zip`.
+**Seabreeze World Shaders** is built in; `./gradlew seabreezeShaderpack` writes an
+editable copy to `build/shaderpacks/seabreeze-world-shaders-<version>.zip`.
 It changes actual terrain shading, water vertices, refraction, absorption, Fresnel
 sky/sun reflections, sky and clouds. Waves use world coordinates with periodic origin
 wrapping; camera movement does not attach the wave pattern to the player. Controls
@@ -134,12 +129,9 @@ shows the interpolated vertex displacement. Fluid waves are restricted to
 transparency, so opaque sprite neighbours preserve their geometry. Reflections are sky approximations;
 there are no traced water reflection/refraction rays or physical caustics.
 
-**Prismarine Showcase Corrected** is a separate resource pack in
-`build/shaderpacks/prismarine-showcase-corrected-0.6.0-prototype.zip`. It preserves
-full-resolution scene detail while applying half-resolution irradiance, retains voxel
-GI/bloom fallbacks, and removes camera-orbiting Lua lights. Its shader resources use
-`prismarine_fixed`, so the owner's original 0.4 ZIP is unchanged and can coexist.
-It is a fullscreen example; use Seabreeze for world/material programs.
+`examples/prismarine-fixed` (`./gradlew prismarineCorrectedShaderpack`) is a
+fullscreen-pass example: half-resolution irradiance over full-resolution scene detail
+with voxel GI and bloom fallbacks.
 
 F6/chat report Loading, Loaded, Fallback or Failed. World programs only count as
 submitted after a real draw is queued and the host encoder submits it. Compilation
@@ -151,12 +143,9 @@ lighting; it does not claim to execute voxel rays it never samples.
 
 These are GreenMarine-format shaders, not direct Iris/OptiFine shaderpack compatibility
 or feature parity. Existing contributed mesh/material/render-graph APIs continue to
-work independently; see [rendering API](RENDERING-API.md). Native RT still has a finite
-loaded model scene and does not include fluids/entities, biome-tinted RT albedo,
-PBR textures, temporal history or distant shadow cascades. FSR4 remains deferred.
-
-Verification and measured scopes are recorded in
-[world-program evidence](../development/evidence/world-programs/README.md).
+work independently; see [rendering API](RENDERING-API.md). Native RT has a finite
+loaded model scene without fluids or entities as geometry, PBR textures or distant
+shadow cascades.
 
 ## Opt-in material capture and surface rays
 

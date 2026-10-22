@@ -48,17 +48,14 @@ when a new lighting scene is published, except opted-in `lightingHistory` passes
 Those packs must reject incompatible surfaces and bound their transition;
 Solstice does so using scene depth, normals and material history.
 
-The core, ray and surface ABI versions remain 1. Older native libraries continue
-through the established synchronous ray API. Pack schema1, MarineFrame288 and
-the existing public constructors remain compatible. These changes improve
-freshness inside the finite scene; they do not add fluid/entity secondary
-geometry or extend RT across the entire render distance.
+All native ABI versions are 1; older native libraries without the async extension
+use the synchronous ray API. Freshness applies inside the finite scene; fluids and
+entities are not secondary geometry, and RT does not cover the full render
+distance. Moving geometry from other mods uses
+[external renderers](EXTERNAL-RENDERERS.md) instead of rescanning.
 
-The focused RX 9070 XT Vulkan fixture measured edit-to-GPU sunlight responses of
-9.88–14.18 ms, compared with 4.96–5.24 seconds using the earlier full scanner and
-tick scheduler. Coverage caught up within 8.70 ms during its section crossings;
+On an RX 9070 XT fixture, a block edit reached the GPU sunlight result in
+9.88–14.18 ms (a full rescan scheduler took about 5 seconds). Coverage caught up within 8.70 ms during its section crossings;
 2509 actual walking GPU readbacks preserved the shadow and unblocked control.
 Steady scene updates added zero native device-idle calls. These are local fixture
-results, not universal latency or frame-rate guarantees. Raw timestamps, separate
-CPU/GPU scopes, failure recovery and limitations are recorded in
-[dynamic scene evidence](../development/evidence/dynamic-rays/README.md).
+results, not universal latency or frame-rate guarantees.

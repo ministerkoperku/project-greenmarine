@@ -13,6 +13,8 @@ layout(std140,set=0,binding=3) uniform TraceFrame {
 layout(set=0,binding=4) uniform sampler2D Atlas;
 vec2 triangleUV(Triangle t,vec2 bary) { return t.uv01.xy*(1.0-bary.x-bary.y)+t.uv01.zw*bary.x+t.uv2.xy*bary.y; }
 vec4 triangleSurface(Triangle t,vec2 bary) { return textureLod(Atlas,triangleUV(t,bary),0.0)*vec4(t.tint.rgb,1); }
+// World RT owns one instance; external meshes are a surface-RT extension.
+Triangle marineFetchTriangle(uint instance,uint primitive) { return triangles[primitive]; }
 #include "sun_transmission.glsl"
 struct Hit { bool found; float distance; uint primitive; vec2 bary; };
 Hit trace(vec3 origin,vec3 direction,float reach) {

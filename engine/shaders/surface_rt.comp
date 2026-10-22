@@ -1,6 +1,8 @@
 #version 460
 #extension GL_EXT_ray_query : require
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
 layout(local_size_x=8,local_size_y=8) in;
 layout(set=0,binding=0) uniform accelerationStructureEXT World;
 struct Triangle { vec4 a; vec4 b; vec4 c; vec4 uv01; vec4 uv2; vec4 tint; };
@@ -11,24 +13,40 @@ layout(std140,set=0,binding=3) uniform TraceFrame {
     vec4 Camera; vec4 Viewport; vec4 Sun; vec4 Options;
 };
 layout(set=0,binding=4) uniform sampler2D Atlas;
+// External renderer meshes (instance custom index >= 1) live in their own buffers,
+// in mesh-local space; index 0 is the scanned world.
+layout(buffer_reference,std430,buffer_reference_align=16) readonly buffer ExternalTriangles { Triangle values[]; };
+struct ExternalEntry { uvec2 address; uint triangles; uint flags; };
+layout(std430,set=0,binding=9) readonly buffer ExternalGeometry { ExternalEntry externals[]; };
+Triangle marineFetchTriangle(uint instance,uint primitive) {
+    if(instance==0u) return triangles[primitive];
+    return ExternalTriangles(externals[instance].address).values[primitive];
+}
 vec2 triangleUV(Triangle t,vec2 bary) { return t.uv01.xy*(1.0-bary.x-bary.y)+t.uv01.zw*bary.x+t.uv2.xy*bary.y; }
-vec4 triangleSurface(Triangle t,vec2 bary) { return textureLod(Atlas,triangleUV(t,bary),0.0)*vec4(t.tint.rgb,1); }
+// uv2.z: 0 opaque atlas, 1 alpha-tested atlas, 2 untextured tint (non-atlas external models).
+vec4 triangleSurface(Triangle t,vec2 bary) {
+    if(t.uv2.z>1.5) return vec4(t.tint.rgb,1);
+    return textureLod(Atlas,triangleUV(t,bary),0.0)*vec4(t.tint.rgb,1);
+}
 #include "sun_transmission.glsl"
-struct Hit { bool found; float distance; uint primitive; vec2 bary; };
+struct Hit { bool found; float distance; uint primitive; uint instance; vec2 bary; mat3 normalMatrix; };
 Hit trace(vec3 origin,vec3 direction,float reach) {
     rayQueryEXT ray;
     rayQueryInitializeEXT(ray,World,gl_RayFlagsNoneEXT,255,origin,.015,direction,reach);
     while(rayQueryProceedEXT(ray)) {
         if(rayQueryGetIntersectionTypeEXT(ray,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
             uint index=rayQueryGetIntersectionPrimitiveIndexEXT(ray,false);
-            Triangle t=triangles[index];
+            Triangle t=marineFetchTriangle(rayQueryGetIntersectionInstanceCustomIndexEXT(ray,false),index);
             if(t.uv2.z<.5 || triangleSurface(t,rayQueryGetIntersectionBarycentricsEXT(ray,false)).a>.1) rayQueryConfirmIntersectionEXT(ray);
         }
     }
     Hit hit;hit.found=rayQueryGetIntersectionTypeEXT(ray,true)==gl_RayQueryCommittedIntersectionTriangleEXT;
     hit.distance=hit.found?rayQueryGetIntersectionTEXT(ray,true):reach;
     hit.primitive=hit.found?rayQueryGetIntersectionPrimitiveIndexEXT(ray,true):0;
+    hit.instance=hit.found?rayQueryGetIntersectionInstanceCustomIndexEXT(ray,true):0;
     hit.bary=hit.found?rayQueryGetIntersectionBarycentricsEXT(ray,true):vec2(0);
+    hit.normalMatrix=mat3(1);
+    if(hit.instance!=0u) hit.normalMatrix=transpose(inverse(mat3(rayQueryGetIntersectionObjectToWorldEXT(ray,true))));
     return hit;
 }
 
@@ -37,11 +55,11 @@ layout(set=0,binding=5) uniform sampler2D SurfaceNormal;
 layout(set=0,binding=6) uniform sampler2D SurfaceAlbedo;
 #include "surface_actors.glsl"
 vec3 linearSurface(Hit hit) {
-    return pow(max(triangleSurface(triangles[hit.primitive],hit.bary).rgb,vec3(0)),vec3(2.2));
+    return pow(max(triangleSurface(marineFetchTriangle(hit.instance,hit.primitive),hit.bary).rgb,vec3(0)),vec3(2.2));
 }
 vec3 hitNormal(Hit hit,vec3 direction) {
-    Triangle t=triangles[hit.primitive];
-    vec3 normal=normalize(cross(t.b.xyz-t.a.xyz,t.c.xyz-t.a.xyz));
+    Triangle t=marineFetchTriangle(hit.instance,hit.primitive);
+    vec3 normal=normalize(hit.normalMatrix*cross(t.b.xyz-t.a.xyz,t.c.xyz-t.a.xyz));
     return dot(normal,direction)>0 ? -normal : normal;
 }
 float sunVisibility(vec3 pos,vec3 normal) {
@@ -86,7 +104,7 @@ void main() {
                     vec3 secondaryPos=pos+normal*.035+bounce*secondary.distance;
                     vec3 secondaryNormal=hitNormal(secondary,bounce);
                     diffuseBounce+=linearSurface(secondary)*(sunIrradiance(secondaryPos,secondaryNormal)
-                        +vec3(triangles[secondary.primitive].uv2.w*.45));
+                        +vec3(marineFetchTriangle(secondary.instance,secondary.primitive).uv2.w*.45));
                 } else diffuseBounce+=vec3(.10,.15,.22)*(max(Options.x,0.0)/.45);
             }
             irradiance+=diffuseBounce*(Options.y*.25);
@@ -105,7 +123,7 @@ void main() {
             } else if(reflectedHit.found) {
                 vec3 hitPos=pos+normal*.035+reflected*reflectedHit.distance;
                 vec3 n=hitNormal(reflectedHit,reflected);
-                vec3 emission=vec3(triangles[reflectedHit.primitive].uv2.w*.45);
+                vec3 emission=vec3(marineFetchTriangle(reflectedHit.instance,reflectedHit.primitive).uv2.w*.45);
                 reflection=vec4(linearSurface(reflectedHit)*(sunIrradiance(hitPos,n)+emission),1);
             }
         }

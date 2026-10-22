@@ -182,6 +182,37 @@ public final class RayWorld {
     }
     /** Resource replacement only; steady rendering polls fences with a zero timeout. */
     public static void awaitSurfaceResources() {pollSubmissions(true);}
+    /** Null until the native RT module is loaded. */
+    public static com.koper.greenmarine.nativebridge.NativeRayTracer tracer() {return nativeRt;}
+    private static long externalFrames;
+    private static String externalDetail="";
+    /** Hands this recording's external renderer instances to the native module. */
+    private static void externalFrame(Minecraft client) {
+        if(!nativeRt.externalAvailable() || scene==null)return;
+        var camera=client.gameRenderer.mainCamera().position();
+        var collected=com.koper.greenmarine.api.external.ExternalRenderers.collectRayGeometry(
+            new com.koper.greenmarine.api.external.ExternalRenderers.RayFrame(camera.x,camera.y,camera.z,
+                client.getDeltaTracker().getGameTimeDeltaPartialTick(false),++externalFrames),scene.x(),scene.y(),scene.z());
+        int code=nativeRt.externalFrame(collected.tokens(),collected.transforms(),collected.count());
+        if(code==-23) {
+            // Device changed under a cached token: re-upload next frame, trace without externals now.
+            com.koper.greenmarine.api.external.ExternalRenderers.invalidate(collected);
+            code=nativeRt.externalFrame(new long[0],new float[0],0);
+        }
+        externalDetail=code!=0?"external geometry rejected ("+code+")"
+            :collected.count()==0?"":collected.count()+" external instances"+(collected.dropped()>0?", "+collected.dropped()+" over budget":"");
+    }
+    /** Raw views for external forward shading; see ExternalRenderers.SurfaceOutputs. */
+    public static com.koper.greenmarine.api.external.ExternalRenderers.SurfaceOutputs externalOutputs() {
+        var normal=com.koper.greenmarine.client.world.WorldPrograms.surfaceNormalDepth();
+        var albedo=com.koper.greenmarine.client.world.WorldPrograms.surfaceAlbedo();
+        if(!surfaceReady || surfaceColorView==null || reflectionView==null || normal==null || albedo==null
+            || !(surfaceColorView instanceof VulkanGpuTextureView))
+            return com.koper.greenmarine.api.external.ExternalRenderers.SurfaceOutputs.UNAVAILABLE;
+        return new com.koper.greenmarine.api.external.ExternalRenderers.SurfaceOutputs(true,
+            ((VulkanGpuTextureView)surfaceColorView).vkImageView(),((VulkanGpuTextureView)reflectionView).vkImageView(),surfaceWidth,surfaceHeight,
+            ((VulkanGpuTextureView)normal).vkImageView(),((VulkanGpuTextureView)albedo).vkImageView());
+    }
     private static long beginSubmission() {
         if(!nativeRt.asyncAvailable())return 0;
         long next=++serial;int code=nativeRt.beginSubmission(next);
@@ -290,6 +321,7 @@ public final class RayWorld {
             lease=beginSubmission();if(lease<0){surfaceDetail="RT submission slots busy; raster surface fallback";return;}
             int measure=surfaceGpu!=null && surfaceFrames>=40?surfaceGpu.begin(encoder):-1;
             var atlas=Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS).getTextureView();
+            externalFrame(Minecraft.getInstance());
             // Extended modules take 64 boxes plus the combined accessory atlas; legacy keeps 16 boxes/one skin.
             boolean extendedActors=nativeRt.extendedActorsAvailable();
             var player=(extendedActors || nativeRt.actorsAvailable()) && scene!=null
@@ -313,7 +345,8 @@ public final class RayWorld {
             if(surfaceGpu!=null)surfaceGpu.end(encoder,measure);
             submit(encoder,submission);surfaceFrames++;surfaceReady=true;
             surfaceDetail="Hardware surface RT active: raster materials, sun/GI and offscreen model reflections; "
-                +(player==null?"local player extension unavailable":PlayerReflection.detail());
+                +(player==null?"local player extension unavailable":PlayerReflection.detail())
+                +(externalDetail.isEmpty()?"":"; "+externalDetail);
             if(surfaceFrames>40)SURFACE_CPU.add((System.nanoTime()-started)/1e6);
         } catch(RuntimeException|LinkageError error) {
             surfaceFailed=true;surfaceDetail="Surface RT unavailable: "+error.getMessage()+"; raster surface fallback";GreenMarine.LOGGER.error(surfaceDetail,error);

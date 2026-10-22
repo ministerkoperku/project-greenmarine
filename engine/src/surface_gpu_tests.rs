@@ -36,11 +36,14 @@ impl Host {
                     return true;
                 }
                 let props = instance.get_physical_device_properties(p);
+                // The owner's acceptance GPU by default; e.g. "llvmpipe" runs lavapipe locally.
+                let wanted = std::env::var("GREENMARINE_GPU_TEST_DEVICE")
+                    .unwrap_or_else(|_| "RX 9070 XT".into());
                 CStr::from_ptr(props.device_name.as_ptr())
                     .to_string_lossy()
-                    .contains("RX 9070 XT")
+                    .contains(wanted.as_str())
             })
-            .expect("Acceptance requires actual RX 9070 XT");
+            .expect("Acceptance requires the selected GPU (RX 9070 XT by default)");
         let mut driver = vk::PhysicalDeviceDriverProperties::default();
         let mut props = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
         instance.get_physical_device_properties2(physical, &mut props);
@@ -1606,5 +1609,197 @@ fn actor_compute_extended_index63_is_visible() {
             &[[-2., 1., 1., 0., 1., 0., 0., 10.]],
         )[0];
         assert_eq!(empty[3], -1.);
+    }
+}
+
+fn translated(x: f32, y: f32, z: f32) -> [f32; 12] {
+    [1., 0., 0., x, 0., 1., 0., y, 0., 0., 1., z]
+}
+#[test]
+#[ignore = "Explicit headless Vulkan acceptance (GREENMARINE_GPU_TEST_DEVICE selects the GPU)"]
+fn surface_gpu_external_meshes_reflect_shadow_move_and_survive_flights() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let (width, height) = (7, 5);
+        let capture_normal =
+            Image::new(&host, width, height, vk::Format::R32G32B32A32_SFLOAT, true);
+        let capture_albedo =
+            Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let outputs = [
+            Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, false),
+            Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, false),
+        ];
+        host.begin();
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        capture_normal.initialize(host.command, [-s, 0.0, -s, 0.5]);
+        capture_albedo.initialize(host.command, [0.1, 0.2, 0.3, 4.05]);
+        atlas.initialize(host.command, [0.8, 0.2, 0.1, 1.0]);
+        for image in &outputs {
+            image.initialize(host.command, [-3.0; 4]);
+        }
+        ray.barrier(host.command);
+        host.submit();
+        let mut frame = [0f32; 80];
+        for matrix in 0..4 {
+            for axis in 0..4 {
+                frame[matrix * 16 + axis * 5] = 1.0;
+            }
+        }
+        frame[68] = width as f32;
+        frame[69] = height as f32;
+        frame[70] = 1.0;
+        frame[72] = -s;
+        frame[73] = s;
+        frame[75] = 1.0;
+        frame[76] = 0.2;
+        let views = [
+            atlas.view.as_raw(),
+            capture_normal.view.as_raw(),
+            capture_albedo.view.as_raw(),
+        ];
+        let center = (height / 2 * width + width / 2) as usize;
+        let world_target = triangle(
+            [[-3.0, -1.0, -0.5], [-3.0, 1.0, -0.5], [-3.0, 0.0, 1.5]],
+            4.0,
+        );
+        ray.scene(&world_target).unwrap();
+        let reference = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(reference[1][center][3], 1.0, "world reference reflects the target");
+
+        // Same triangle authored in mesh space and placed by its instance transform.
+        let world_miss = triangle([[3.0, -1.0, -0.5], [3.0, 1.0, -0.5], [3.0, 0.0, 1.5]], 4.0);
+        ray.scene(&world_miss).unwrap();
+        let empty = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(empty[1][center], [0.0; 4], "world alone has nothing to reflect");
+        let local_target = triangle([[0.0, -1.0, -0.5], [0.0, 1.0, -0.5], [0.0, 0.0, 1.5]], 4.0);
+        let factory = ray.scene_factory();
+        let target = factory.prepare_mesh(&local_target).unwrap();
+        ray.set_external_frame(vec![ExternalInstance {
+            mesh: target.clone(),
+            transform: translated(-3.0, 0.0, 0.0),
+        }])
+        .unwrap();
+        let external = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert!(target.built.load(Ordering::Acquire), "first recording builds the mesh BLAS");
+        for channel in 0..4 {
+            assert!(
+                (external[1][center][channel] - reference[1][center][channel]).abs() < 0.002,
+                "external instance must reflect exactly like world geometry, channel {channel}: {:?} vs {:?}",
+                external[1][center],
+                reference[1][center]
+            );
+        }
+        assert_eq!(external[0][center][3], 1.0, "reflected mesh does not shadow the surfel");
+        println!(
+            "surface_gpu external reflection={:?} reference={:?}",
+            external[1][center], reference[1][center]
+        );
+
+        // An external blocker above the surfel casts a sun shadow onto captured terrain.
+        let local_blocker = triangle([[-1.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.0, 0.0, 1.0]], 0.0);
+        let blocker = factory.prepare_mesh(&local_blocker).unwrap();
+        ray.set_external_frame(vec![
+            ExternalInstance {
+                mesh: target.clone(),
+                transform: translated(-3.0, 0.0, 0.0),
+            },
+            ExternalInstance {
+                mesh: blocker.clone(),
+                transform: translated(-1.0, 1.0, 0.5),
+            },
+        ])
+        .unwrap();
+        let shadowed = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(shadowed[0][center][3], 0.0, "external blocker must occlude the sun");
+        assert!(
+            (shadowed[0][center][0] - 0.2).abs() < 0.002,
+            "shadowed surfel keeps ambient only: {:?}",
+            shadowed[0][center]
+        );
+        assert_eq!(shadowed[1][center][3], 1.0, "reflection survives the shadow caster");
+
+        // Moving only the transform must move the hit: the TLAS is rebuilt per recording.
+        ray.set_external_frame(vec![ExternalInstance {
+            mesh: target.clone(),
+            transform: translated(6.0, 0.0, 0.0),
+        }])
+        .unwrap();
+        let moved = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(moved[1][center], [0.0; 4], "moved instance leaves the reflected ray");
+        assert_eq!(moved[0][center][3], 1.0, "moved blocker no longer shadows");
+
+        // Untextured tint mode for model textures that are not in the block atlas.
+        let mut tinted = local_target;
+        tinted[14] = 2.0;
+        let tint_mesh = factory.prepare_mesh(&tinted).unwrap();
+        ray.set_external_frame(vec![ExternalInstance {
+            mesh: tint_mesh,
+            transform: translated(-3.0, 0.0, 0.0),
+        }])
+        .unwrap();
+        let tint = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        let scale = reference[1][center][1] / (51f32 / 255.0).powf(2.2);
+        for (channel, value) in [0.5f32, 1.0, 0.25].iter().enumerate() {
+            let expected = value.powf(2.2) * scale;
+            assert!(
+                (tint[1][center][channel] - expected).abs() < 0.004,
+                "tint-only albedo channel {channel}: {} vs {expected}",
+                tint[1][center][channel]
+            );
+        }
+
+        ray.set_external_frame(Vec::new()).unwrap();
+        let cleared = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(cleared, empty, "an empty frame returns to the world TLAS");
+
+        // Flight leases copy the frame, rebuild their own TLAS and keep meshes alive.
+        ray.set_external_frame(vec![ExternalInstance {
+            mesh: target.clone(),
+            transform: translated(-3.0, 0.0, 0.0),
+        }])
+        .unwrap();
+        assert_eq!(ray.begin_submission(1).unwrap(), 0);
+        let leased = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(ray.submission_submitted(1).unwrap(), 0);
+        assert_eq!(ray.submission_completed(1).unwrap(), 0);
+        assert_eq!(leased[1][center], external[1][center], "flight path matches direct path");
+
+        let late = factory.prepare_mesh(&local_blocker).unwrap();
+        ray.set_external_frame(vec![ExternalInstance {
+            mesh: late.clone(),
+            transform: translated(-1.0, 1.0, 0.5),
+        }])
+        .unwrap();
+        assert_eq!(ray.begin_submission(2).unwrap(), 0);
+        host.begin();
+        ray.record_surface(
+            host.command,
+            &frame,
+            width,
+            height,
+            [outputs[0].handle, outputs[1].handle],
+            views,
+        )
+        .unwrap();
+        host.device.end_command_buffer(host.command).unwrap();
+        assert!(late.built.load(Ordering::Acquire));
+        assert_eq!(ray.submission_cancel(2).unwrap(), 0);
+        assert!(
+            !late.built.load(Ordering::Acquire),
+            "a cancelled recording must not leave its BLAS marked built"
+        );
+        assert_eq!(ray.begin_submission(3).unwrap(), 0);
+        let rebuilt = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(ray.submission_submitted(3).unwrap(), 0);
+        assert_eq!(ray.submission_completed(3).unwrap(), 0);
+        assert_eq!(rebuilt[0][center][3], 0.0, "rebuilt blocker shadows after cancel");
+        println!(
+            "surface_gpu external shadow={:?} moved={:?} tint={:?} flight={:?}",
+            shadowed[0][center], moved[1][center], tint[1][center], leased[1][center]
+        );
     }
 }

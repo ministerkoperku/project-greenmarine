@@ -10,6 +10,17 @@ use std::sync::{
 };
 use std::time::Instant;
 
+#[path = "external.rs"]
+mod external;
+pub use external::{
+    validate_external_transform, EXTERNAL_TABLE_BYTES, MAX_EXTERNAL_INSTANCES,
+    MAX_EXTERNAL_MESH_TRIANGLES,
+};
+#[cfg(test)]
+pub use external::validate_external_mesh;
+pub(crate) use external::{ExternalInstance, ExternalMesh};
+use external::ExternalTlas;
+
 pub fn validate_scene(values: &[f32]) -> Result<(), String> {
     if values.is_empty()
         || !values.len().is_multiple_of(24)
@@ -167,6 +178,10 @@ pub struct RayState {
     flights: Option<Box<FlightPool>>,
     atlas: u64,
     surface: Option<SurfaceState>,
+    // Surface-RT external instances for the next recording; flights hold their own copy.
+    external_frame: Vec<ExternalInstance>,
+    external_tlas: Option<ExternalTlas>,
+    external_built: Vec<Arc<ExternalMesh>>,
 }
 impl Drop for RayState {
     fn drop(&mut self) {
@@ -224,6 +239,9 @@ impl RayState {
             flights: None,
             atlas: 0,
             surface: None,
+            external_frame: Vec::new(),
+            external_tlas: None,
+            external_built: Vec::new(),
         };
         let types = [
             vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
@@ -379,6 +397,7 @@ impl RayState {
         self.bind_scene();
         if let Some(surface) = self.surface.as_mut() {
             surface.scene_handle = 0;
+            surface.tlas_handle = 0;
         }
         Ok(())
     }
@@ -612,6 +631,7 @@ impl RayState {
         self.scene = None;
         if let Some(surface) = self.surface.as_mut() {
             surface.scene_handle = 0;
+            surface.tlas_handle = 0;
             surface.views = [0; 3];
             surface.skin = 0;
         }
@@ -680,7 +700,7 @@ pub fn surface_output_layout(width: u32, height: u32) -> Result<SurfaceOutputLay
         bytes: reflection_offset + image_bytes,
     })
 }
-pub fn surface_descriptor_types() -> [vk::DescriptorType; 9] {
+pub fn surface_descriptor_types() -> [vk::DescriptorType; 10] {
     use vk::DescriptorType as D;
     [
         D::ACCELERATION_STRUCTURE_KHR,
@@ -692,6 +712,7 @@ pub fn surface_descriptor_types() -> [vk::DescriptorType; 9] {
         D::COMBINED_IMAGE_SAMPLER,
         D::STORAGE_BUFFER,
         D::COMBINED_IMAGE_SAMPLER,
+        D::STORAGE_BUFFER,
     ]
 }
 
@@ -708,9 +729,11 @@ struct SurfaceState {
     uniform: Option<Buffer>,
     output: Option<Buffer>,
     actors: Option<Buffer>,
+    external_table: Option<Buffer>,
     skin: u64,
     views: [u64; 3],
     scene_handle: u64,
+    tlas_handle: u64,
     tracked: bool,
     owner: Option<Arc<PipelineOwner>>,
 }
@@ -719,6 +742,7 @@ impl Drop for SurfaceState {
         unsafe {
             self.output.take();
             self.actors.take();
+            self.external_table.take();
             self.uniform.take();
             if self.owner.is_none() && self.pipeline != vk::Pipeline::null() {
                 self.device.destroy_pipeline(self.pipeline, None);
@@ -756,9 +780,11 @@ impl SurfaceState {
             uniform: None,
             output: None,
             actors: None,
+            external_table: None,
             skin: 0,
             views: [0; 3],
             scene_handle: 0,
+            tlas_handle: 0,
             tracked: false,
             owner: None,
         };
@@ -787,7 +813,7 @@ impl SurfaceState {
             },
             vk::DescriptorPoolSize {
                 ty: types[1],
-                descriptor_count: 3,
+                descriptor_count: 4,
             },
             vk::DescriptorPoolSize {
                 ty: types[3],
@@ -892,6 +918,15 @@ impl SurfaceState {
         )?;
         self.bind_buffer(7, &buffer, vk::DescriptorType::STORAGE_BUFFER);
         self.actors = Some(buffer);
+        let table = Buffer::new(
+            &self.device,
+            &self.memory,
+            EXTERNAL_TABLE_BYTES,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            false,
+        )?;
+        self.bind_buffer(9, &table, vk::DescriptorType::STORAGE_BUFFER);
+        self.external_table = Some(table);
         Ok(())
     }
     unsafe fn bind_buffer(&self, binding: u32, buffer: &Buffer, ty: vk::DescriptorType) {
@@ -978,6 +1013,8 @@ impl RayState {
                     .scene
                     .as_ref()
                     .is_some_and(|s| !s.built.load(Ordering::Acquire));
+                // The lease keeps these meshes alive until its fence completes.
+                slot.state.external_frame = self.external_frame.clone();
                 let result = slot.state.record_surface_actors_extended(
                     command, frame, width, height, images, views, actors, skin,
                 );
@@ -999,17 +1036,19 @@ impl RayState {
             return Err("Surface RT pipeline or shared scene is unavailable".into());
         }
         self.barrier(command);
-        if !self.scene.as_ref().unwrap().built.load(Ordering::Acquire) {
-            self.build(command, self.scene.as_ref().unwrap());
-            self.scene
-                .as_ref()
-                .unwrap()
-                .built
-                .store(true, Ordering::Release);
+        let scene = self.scene.clone().unwrap();
+        if !scene.built.load(Ordering::Acquire) {
+            self.build(command, &scene);
+            scene.built.store(true, Ordering::Release);
         }
+        let (tlas, table) = self
+            .prepare_external(command, &scene)?
+            .unwrap_or_else(|| (scene.tlas.handle, vec![0; 4]));
         self.surface.as_mut().unwrap().record(
             command,
-            self.scene.as_ref().unwrap(),
+            &scene,
+            tlas,
+            &table,
             frame,
             width,
             height,
@@ -1041,6 +1080,8 @@ impl SurfaceState {
         &mut self,
         command: vk::CommandBuffer,
         scene: &Scene,
+        tlas: vk::AccelerationStructureKHR,
+        table: &[u32],
         frame: &[f32],
         width: u32,
         height: u32,
@@ -1049,6 +1090,12 @@ impl SurfaceState {
         actors: &[f32],
         skin: u64,
     ) -> Result<(), String> {
+        if table.len() < 4
+            || !table.len().is_multiple_of(4)
+            || table.len() as u64 * 4 > EXTERNAL_TABLE_BYTES
+        {
+            return Err("Invalid external geometry table".into());
+        }
         if command == vk::CommandBuffer::null()
             || images.contains(&vk::Image::null())
             || images[0] == images[1]
@@ -1060,6 +1107,7 @@ impl SurfaceState {
         if self.output.as_ref().map(|b| b.size) != Some(layout.bytes)
             || self.views != views
             || self.scene_handle != scene.id
+            || self.tlas_handle != tlas.as_raw()
             || self.skin != skin
         {
             // Descriptor sets cannot be rewritten while previous submissions use them.
@@ -1099,7 +1147,10 @@ impl SurfaceState {
             }
             if self.scene_handle != scene.id {
                 self.bind_buffer(1, &scene.metadata, vk::DescriptorType::STORAGE_BUFFER);
-                let handles = [scene.tlas.handle];
+                self.scene_handle = scene.id;
+            }
+            if self.tlas_handle != tlas.as_raw() {
+                let handles = [tlas];
                 let mut acceleration = vk::WriteDescriptorSetAccelerationStructureKHR::default()
                     .acceleration_structures(&handles);
                 self.device.update_descriptor_sets(
@@ -1111,7 +1162,7 @@ impl SurfaceState {
                         .push_next(&mut acceleration)],
                     &[],
                 );
-                self.scene_handle = scene.id;
+                self.tlas_handle = tlas.as_raw();
             }
             if self.views != views {
                 for (i, view) in views.iter().enumerate() {
@@ -1144,6 +1195,12 @@ impl SurfaceState {
             self.uniform.as_ref().unwrap().handle,
             0,
             std::slice::from_raw_parts(frame.as_ptr() as *const u8, 320),
+        );
+        self.device.cmd_update_buffer(
+            command,
+            self.external_table.as_ref().unwrap().handle,
+            0,
+            std::slice::from_raw_parts(table.as_ptr() as *const u8, table.len() * 4),
         );
         self.device.cmd_pipeline_barrier(
             command,
@@ -1399,7 +1456,7 @@ unsafe fn flight_set(
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: if surface { 3 } else { 2 },
+            descriptor_count: if surface { 4 } else { 2 },
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -1444,9 +1501,11 @@ impl SurfaceState {
             uniform: None,
             output: None,
             actors: None,
+            external_table: None,
             skin: 0,
             views: [0; 3],
             scene_handle: 0,
+            tlas_handle: 0,
             tracked: true,
             owner: self.owner.clone(),
         };
@@ -1552,6 +1611,9 @@ impl RayState {
             flights: None,
             atlas: 0,
             surface: None,
+            external_frame: Vec::new(),
+            external_tlas: None,
+            external_built: Vec::new(),
         };
         (state.pool, state.set) = flight_set(&state.device, state.layout, false)?;
         state.uniform = Some(Buffer::new(
@@ -1625,9 +1687,11 @@ impl RayState {
         slot.state.atlas = 0;
         if let Some(surface) = slot.state.surface.as_mut() {
             surface.scene_handle = 0;
+            surface.tlas_handle = 0;
             surface.views = [0; 3];
             surface.skin = 0;
         }
+        slot.state.release_external();
         slot.serial = serial;
         slot.status = LeaseStatus::Recording;
         slot.build_recorded = false;
@@ -1666,6 +1730,7 @@ impl RayState {
             .find(|f| f.serial == serial && f.status == LeaseStatus::Submitted)
             .unwrap();
         slot.state.scene = None;
+        slot.state.release_external();
         slot.status = LeaseStatus::Free;
         slot.build_recorded = false;
         pool.completed = serial;
@@ -1685,6 +1750,7 @@ impl RayState {
             }
         }
         slot.state.scene = None;
+        slot.state.cancel_external();
         slot.status = LeaseStatus::Free;
         slot.build_recorded = false;
         pool.active = None;

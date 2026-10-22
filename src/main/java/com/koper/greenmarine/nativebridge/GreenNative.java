@@ -78,12 +78,16 @@ public final class GreenNative implements AutoCloseable {
 
     public NativeRayTracer rayTracer() { return new NativeRayTracer(available()?symbols:null); }
 
+    private static final java.util.concurrent.atomic.AtomicLong GENERATION = new java.util.concurrent.atomic.AtomicLong();
+    /** Changes whenever the native device context is attached or detached; native mesh tokens die with it. */
+    public static long deviceGeneration() { return GENERATION.get(); }
+
     public boolean available() { return arena != null && arena.scope().isAlive(); }
     public String status() { return status; }
 
     public int attach(long instance, long physical, long device, long queue, int family) {
         if (!available()) return -2;
-        try { return (int) attach.invokeExact(instance, physical, device, queue, family); }
+        try { int result = (int) attach.invokeExact(instance, physical, device, queue, family); GENERATION.incrementAndGet(); return result; }
         catch (Throwable error) { status = "Native attachment failed: " + error; return -3; }
     }
 
@@ -95,7 +99,7 @@ public final class GreenNative implements AutoCloseable {
 
     public void detach() {
         if (!available()) return;
-        try { detach.invokeExact(); }
+        try { detach.invokeExact(); GENERATION.incrementAndGet(); }
         catch (Throwable error) { status = "Native detach failed: " + error; }
     }
 

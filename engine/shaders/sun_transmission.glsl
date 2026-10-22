@@ -6,7 +6,7 @@ float traceSunTransmission(vec3 origin,vec3 direction,float reach) {
     while(rayQueryProceedEXT(ray)) {
         if(rayQueryGetIntersectionTypeEXT(ray,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
             uint index=rayQueryGetIntersectionPrimitiveIndexEXT(ray,false);
-            Triangle material=triangles[index];
+            Triangle material=marineFetchTriangle(rayQueryGetIntersectionInstanceCustomIndexEXT(ray,false),index);
             if(material.uv2.z>=.5 && triangleSurface(material,rayQueryGetIntersectionBarycentricsEXT(ray,false)).a<=.1) continue;
             transmission*=clamp(material.tint.w,0.0,1.0);
             if(transmission<.01) {

@@ -54,6 +54,7 @@ pub extern "C" fn greenmarine_attach(
             return -3;
         };
         invalidate_prepared();
+        invalidate_meshes();
         *context = Some(BorrowedContext {
             _device: device,
             _instance: instance,
@@ -87,6 +88,8 @@ pub extern "C" fn greenmarine_detach() {
             ACTIVE_EPOCH.store(0, Ordering::Release);
             invalidate_prepared();
             *context = None;
+            // After RayState: flights may hold the last mesh references.
+            invalidate_meshes();
         }
     });
 }
@@ -282,7 +285,8 @@ mod surface_rt_contract_tests {
                     D::COMBINED_IMAGE_SAMPLER,
                     D::COMBINED_IMAGE_SAMPLER,
                     D::STORAGE_BUFFER,
-                    D::COMBINED_IMAGE_SAMPLER
+                    D::COMBINED_IMAGE_SAMPLER,
+                    D::STORAGE_BUFFER
                 ]
         );
     }
@@ -960,5 +964,208 @@ mod extended_actor_contract_tests {
                 -1
             );
         }
+    }
+}
+
+// External meshes outlive scene epochs (world/pack resets) but never the attached device.
+const MAX_EXTERNAL_MESHES: usize = 4096;
+const MAX_EXTERNAL_MESH_BYTES: u64 = 256 * 1024 * 1024;
+static MESHES: Mutex<Option<HashMap<u64, Arc<rt::ExternalMesh>>>> = Mutex::new(None);
+static MESH_TOKEN: AtomicU64 = AtomicU64::new(1);
+fn invalidate_meshes() {
+    if let Ok(mut m) = MESHES.lock() {
+        *m = None;
+    }
+}
+#[no_mangle]
+pub extern "C" fn greenmarine_rt_external_api_version() -> u32 {
+    1
+}
+#[no_mangle]
+/// # Safety
+/// Values reference triangle_count * 24 readable aligned floats (the scene triangle ABI,
+/// in mesh-local space) until return. Any thread; status/error use the preparation
+/// thread-locals. Returns a nonzero token, or 0 with a status: 1 budget busy, negative error.
+pub unsafe extern "C" fn greenmarine_rt_mesh_prepare(values: *const f32, triangle_count: u32) -> u64 {
+    if values.is_null()
+        || triangle_count == 0
+        || triangle_count as usize > rt::MAX_EXTERNAL_MESH_TRIANGLES
+    {
+        return prepare_status(-1, "Invalid external mesh ABI");
+    }
+    catch_unwind(AssertUnwindSafe(|| {
+        let (factory, _entry) = {
+            let Ok(context) = CONTEXT.lock() else {
+                return prepare_status(-3, "Context lock failed");
+            };
+            let Some(context) = context.as_ref() else {
+                return prepare_status(-2, "No attached host");
+            };
+            let Some(ray) = context.ray.as_ref() else {
+                return prepare_status(-2, "No RT pipeline");
+            };
+            (ray.scene_factory(), context._entry.clone())
+        };
+        {
+            let Ok(guard) = MESHES.lock() else {
+                return prepare_status(-3, "Mesh registry lock failed");
+            };
+            if let Some(registry) = guard.as_ref() {
+                let bytes: u64 = registry.values().map(|m| m.bytes()).sum();
+                if registry.len() >= MAX_EXTERNAL_MESHES
+                    || bytes + triangle_count as u64 * 192 > MAX_EXTERNAL_MESH_BYTES
+                {
+                    return prepare_status(1, "External mesh budget is full");
+                }
+            }
+        }
+        let mesh = match factory.prepare_mesh(std::slice::from_raw_parts(
+            values,
+            triangle_count as usize * 24,
+        )) {
+            Ok(mesh) => mesh,
+            Err(e) => return prepare_status(-21, &e),
+        };
+        let Ok(mut guard) = MESHES.lock() else {
+            return prepare_status(-3, "Mesh registry lock failed");
+        };
+        let token = MESH_TOKEN.fetch_add(1, Ordering::Relaxed);
+        guard.get_or_insert_with(HashMap::new).insert(token, mesh);
+        prepare_status(0, "");
+        token
+    }))
+    .unwrap_or_else(|_| prepare_status(-3, "Mesh preparation panicked"))
+}
+#[no_mangle]
+/// Pending recordings keep their own references; release only forgets the token.
+pub extern "C" fn greenmarine_rt_mesh_release(token: u64) -> i32 {
+    if token == 0 {
+        return -1;
+    }
+    let Ok(mut guard) = MESHES.lock() else {
+        return -3;
+    };
+    if guard.as_mut().and_then(|r| r.remove(&token)).is_some() {
+        0
+    } else {
+        -23
+    }
+}
+#[no_mangle]
+/// # Safety
+/// Tokens reference `count` readable u64 values and transforms `count * 12` readable
+/// aligned floats: row-major 3x4 mesh-to-scene matrices relative to the published
+/// scene origin. Count 0 clears. Unknown tokens reject the whole frame with -23.
+pub unsafe extern "C" fn greenmarine_rt_external_frame(
+    tokens: *const u64,
+    transforms: *const f32,
+    count: u32,
+) -> i32 {
+    if count as usize > rt::MAX_EXTERNAL_INSTANCES || (count > 0 && (tokens.is_null() || transforms.is_null())) {
+        return -1;
+    }
+    let mut frame = Vec::with_capacity(count as usize);
+    if count > 0 {
+        let tokens = std::slice::from_raw_parts(tokens, count as usize);
+        let transforms = std::slice::from_raw_parts(transforms, count as usize * 12);
+        if transforms.chunks_exact(12).any(|t| rt::validate_external_transform(t).is_err()) {
+            return -1;
+        }
+        let Ok(guard) = MESHES.lock() else {
+            return -3;
+        };
+        let Some(registry) = guard.as_ref() else {
+            return -23;
+        };
+        for (token, transform) in tokens.iter().zip(transforms.chunks_exact(12)) {
+            let Some(mesh) = registry.get(token) else {
+                return -23;
+            };
+            frame.push(rt::ExternalInstance {
+                mesh: mesh.clone(),
+                transform: transform.try_into().unwrap(),
+            });
+        }
+    }
+    ray_result(|context| {
+        context
+            .ray
+            .as_mut()
+            .ok_or("RT pipeline is unavailable")?
+            .set_external_frame(frame)
+    })
+}
+#[no_mangle]
+/// # Safety
+/// Output references 3 writable u64 values: meshes, mesh bytes, instances queued.
+pub unsafe extern "C" fn greenmarine_rt_external_stats(output: *mut u64, count: u32) -> i32 {
+    if output.is_null() || count != 3 {
+        return -1;
+    }
+    let Ok(guard) = MESHES.lock() else {
+        return -3;
+    };
+    let (meshes, bytes) = guard.as_ref().map_or((0, 0), |r| {
+        (r.len() as u64, r.values().map(|m| m.bytes()).sum::<u64>())
+    });
+    drop(guard);
+    let instances = CONTEXT
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().and_then(|c| c.ray.as_ref().map(|r| r.external_instances() as u64)))
+        .unwrap_or(0);
+    std::ptr::copy_nonoverlapping([meshes, bytes, instances].as_ptr(), output, 3);
+    0
+}
+
+#[cfg(test)]
+mod external_contract_tests {
+    use super::*;
+    #[test]
+    fn external_abi_is_additive_and_rejects_invalid_input_without_a_host() {
+        assert_eq!(greenmarine_abi_version(), 1);
+        assert_eq!(greenmarine_surface_rt_api_version(), 1);
+        assert_eq!(greenmarine_rt_external_api_version(), 1);
+        unsafe {
+            assert_eq!(greenmarine_rt_mesh_prepare(std::ptr::null(), 1), 0);
+            assert_eq!(greenmarine_rt_prepare_status(), -1);
+            let triangle = [0f32; 24];
+            assert_eq!(
+                greenmarine_rt_mesh_prepare(triangle.as_ptr(), rt::MAX_EXTERNAL_MESH_TRIANGLES as u32 + 1),
+                0
+            );
+            assert_eq!(greenmarine_rt_external_frame(std::ptr::null(), std::ptr::null(), 1), -1);
+            assert_eq!(
+                greenmarine_rt_external_frame(std::ptr::null(), std::ptr::null(), rt::MAX_EXTERNAL_INSTANCES as u32 + 1),
+                -1
+            );
+            let token = 7u64;
+            let singular = [0f32; 12];
+            assert_eq!(greenmarine_rt_external_frame(&token, singular.as_ptr(), 1), -1);
+            let identity = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.];
+            // A well-formed frame naming an unknown mesh is rejected as stale.
+            assert_eq!(greenmarine_rt_external_frame(&token, identity.as_ptr(), 1), -23);
+            let mut stats = [9u64; 3];
+            assert_eq!(greenmarine_rt_external_stats(stats.as_mut_ptr(), 2), -1);
+        }
+        assert_eq!(greenmarine_rt_mesh_release(0), -1);
+        assert_eq!(greenmarine_rt_mesh_release(123_456), -23);
+    }
+    #[test]
+    fn transforms_must_be_finite_invertible_affine_rows() {
+        let identity = [1., 0., 0., 4., 0., 1., 0., -2., 0., 0., 1., 9.];
+        assert!(rt::validate_external_transform(&identity).is_ok());
+        let mut flat = identity;
+        flat[10] = 0.;
+        assert!(rt::validate_external_transform(&flat).is_err());
+        let mut nan = identity;
+        nan[3] = f32::NAN;
+        assert!(rt::validate_external_transform(&nan).is_err());
+        assert!(rt::validate_external_transform(&identity[..11]).is_err());
+        let mut triangle = [0f32; 24];
+        triangle[4] = 1.;
+        triangle[9] = 1.;
+        assert!(rt::validate_external_mesh(&triangle).is_ok());
+        assert!(rt::validate_external_mesh(&triangle[..23]).is_err());
     }
 }

@@ -18,7 +18,9 @@
     "WorldRenderPassMixin",
     "WorldPipelineRegistryMixin",
     "WorldSubmitMixin",
-    "WorldTransparencyMixin"
+    "WorldTransparencyMixin",
+    "ExternalPassAccessor",
+    "ExternalVulkanPassAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -9,9 +9,12 @@ A mounted Minecraft resource pack supplies a manifest at
 on resource reload. Mod assets need a resource loader/mounting mechanism or
 the direct Java registration below; Fabric Loader alone does not mount every
 mod's assets. GreenMarine mounts its own built-in resources without Fabric API.
-The complete built-in Portable, Advanced and Radiance examples are
-usable starting points. Schema v1 supports a lightmap pass and ordered scene
-passes; it does not replace Minecraft's geometry/shadow/material pipelines.
+The shipped packs (Marine Raster, Seabreeze, Solstice RT) are under
+`src/main/resources/assets/greenmarine/greenmarine/packs/`. Smaller fullscreen
+examples (Portable lightmap/grade, Advanced bloom, Radiance voxel emitters, Aurora
+world rays) live in `src/samples/resources` as API fixtures; they are not in the
+release jar but remain complete starting points. Schema v1 supports a lightmap pass,
+ordered scene passes and world programs (below).
 
 ## Manifest
 
@@ -311,7 +314,7 @@ partial/non-solid emitter geometry is approximated by cells. Check readiness
 before custom direct atlas reads; helper material lookups return zero when
 unavailable. Rays are ordinary shader DDA, with no enabled hardware RT claim.
 
-The Radiance sample estimates diffuse emitter lighting using 4 High/8 Ultra
+The Radiance sample (`src/samples`) estimates diffuse emitter lighting using 4 High/8 Ultra
 cosine hemisphere rays per shaded surface at half resolution. RGB radiance and
 view distance use RGBA16F; the final pass rejects depth mismatches when gathering
 and retains original full-resolution scene detail. It uses world emitter data,
@@ -397,10 +400,11 @@ This provides temporal accumulation inputs, without projection jitter or a
 jittered TAA claim. A pack chooses its rejection tests and blend weights;
 runtime backend rendering acceptance requires separate Vulkan/OpenGL evidence.
 
-## Hardware model rays and readiness (0.5)
+## Hardware model rays and readiness
 
-The builtin Aurora RT and installable independent namespace example expose real
-native Vulkan model ray queries. See [HARDWARE-RT.md](HARDWARE-RT.md) for
+Packs declaring `hardware_rt` passes use native Vulkan model ray queries
+(Solstice RT; `examples/aurora-rt` is a small standalone example). See
+[HARDWARE-RT.md](HARDWARE-RT.md) for
 RayFrame80, initialized scene-only samplers, finite coverage, status states and
 platform limits. MarineFrame288 and declaration-ordered parameter slots are
 unchanged. Public graph imports carry the same ready data. No Iris format
@@ -418,4 +422,4 @@ the additive pack-aware overload supplies runtime behavior. F6 reports the reaso
 Schema 1 additionally accepts optional `programs` with `target`, optional `vertex`,
 `fragment`, and `worldRays`. Existing passes and parameters keep their layout.
 See [world shader programs](WORLD-PROGRAMS.md) for the host interfaces, automatic
-bindings, OIT requirements and working Seabreeze/Prismarine examples.
+bindings, OIT requirements and the Seabreeze example.

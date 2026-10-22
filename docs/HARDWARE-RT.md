@@ -1,43 +1,66 @@
-# Aurora hardware world rays (0.5)
+# Hardware ray tracing
 
-Select **Aurora Hardware RT** in F6 with **Hardware** or **Auto** rays. The
-standalone mod needs Minecraft 26.3, Java 25 and Loader 0.19.5+. Vulkan must be
-selected before launch (`--graphicsBackend vulkan` game argument). The bundled
-native engine currently supports Linux x86_64; JVM native access is required.
-FSR4 remains deferred. Existing Portable/Advanced/Radiance packs keep their APIs.
+GreenMarine traces real Vulkan ray queries against the loaded world, recorded into
+Minecraft's own command stream on Minecraft's own device. Nothing is screen-space:
+hits can be off-screen, behind the camera or occluded in the image.
 
-`build/shaderpacks/aurora-rt-example-0.5.0-prototype.zip` is a complete resource
-pack example. Enable it in Minecraft resource packs, then select
-`aurora:rt_example` in F6. Its editable JSON/Lua are in `examples/aurora-rt`;
-`./gradlew exampleShaderpack` packages those and the tested builtin GLSL.
-This uses GreenMarine schema1 and is not an Iris/OptiFine-format pack.
+## Requirements and status
 
-F6 shows Disabled/Loading/Loaded/Fallback/Failed and a reason; chat announces
-terminal state transitions. Loaded requires all selected pack programs to submit
-and required current-frame RT data to be ready. Script-only packs explicitly
-report script readiness without rendering passes. Packs without hardware_rt passes retain their portable voxel selection.
-Unsupported features, OpenGL,
-missing native engine or Rays Off use the declared fallback and report Fallback.
-A hardware-capable GPU alone is insufficient. Failure details are logged and
-reported; render-path changes refresh status even while the game is paused.
+- Vulkan backend: add `--graphicsBackend vulkan` to the **game** arguments.
+  Minecraft picks its device before mods load; GreenMarine never switches it.
+- A GPU and driver exposing `VK_KHR_acceleration_structure` and
+  `VK_KHR_ray_query`. GreenMarine asks Minecraft to enable them when available.
+- The bundled native engine for the platform (Linux x86_64, Linux ARM64, Android
+  ARM64) and `--enable-native-access=ALL-UNNAMED` in the **JVM** arguments.
+- Ray mode **Hardware**, or **Auto** at High/Ultra quality, and a pack that
+  declares hardware passes (Solstice RT).
 
-The native path builds actual Vulkan BLAS/TLAS from loaded baked block-model
-triangles and UVs. Ray queries sample Minecraft's borrowed block atlas and test
-cutout candidates. Primary rays honor the submitted world projection, including
-translated bob/hurt effects. Each matched surface receives sun visibility and
-four diffuse rays with 12-block reach; secondary materials include emission and
-geometry outside the visible image. The sun direction/weather follow vanilla's
-render state. These are actual world rays, not screen-space color lookups.
+A capable GPU alone is not enough: the host device, enabled features, native
+pipeline and current scene must all be ready. F6 and chat report
+Loading / Loaded / Fallback / Failed with a reason; *Loaded* means the selected
+programs actually submitted with ready RT data this frame. OpenGL, Rays Off, a
+missing native library or unsupported features select the pack's declared
+fallback and report *Fallback*.
 
-Java incrementally collects a 96x64x96 scene on a stable 16-block grid, skips
-empty/unloaded sections, and publishes complete immutable snapshots. There is a
-one-million-triangle budget. Replacements/resize/reload may wait for the device;
-steady frames reuse resources without device idle. Acquiring scene changes can
-lag movement or edits. RT shadow distance is finite. The example uses the same
-global lighting baseline across the world and fades finite-scene shadow/GI
-contribution over eight blocks rather than revealing a hard camera-local patch.
+Ray modes:
 
-Scene shaders may include `<greenmarine:rays.glsl>`:
+| Mode | Behaviour |
+|---|---|
+| Off | No ray work |
+| Auto | Off below High; at High/Ultra uses hardware when ready, else voxel |
+| Voxel | Shader DDA through a local 32³ occupancy grid, both backends, no native code |
+| Hardware | Native Vulkan ray queries; falls back when unavailable |
+
+## The scene
+
+Java incrementally scans loaded chunks into a 96x64x96-block region on a stable
+16-block grid around the camera, skipping empty or unloaded sections, and builds
+triangles from baked block models with their atlas UVs, biome tint, emission and
+sunlight transmission. Complete snapshots are uploaded on a worker thread and
+published atomically as a BLAS/TLAS pair; budget one million triangles. Block
+edits invalidate their section. Scene changes can lag fast movement or edits by a
+few frames; lighting fades out over the last blocks of the region instead of
+ending at a hard edge.
+
+On top of the world, the surface tracer adds:
+
+- the local player's posed body as textured boxes ([actor reflections](ACTOR-REFLECTIONS.md));
+- meshes registered by other renderers, placed per frame through instance
+  transforms ([external renderers](EXTERNAL-RENDERERS.md)).
+
+Entities, fluids as geometry, particles and distant terrain are not ray targets.
+
+## Two tracers
+
+**Surface rays** (used by Solstice) start from a material capture of the visible
+terrain: sun visibility, four diffuse GI rays and, on reflective materials, a
+reflection ray per surfel, written at quarter or half resolution and reconstructed
+against the full-resolution capture. Bindings: `surface_rays.glsl`, described in
+[surface rendering](SURFACE-RENDERING.md) and [Solstice RT](SOLSTICE-RT.md).
+
+**World rays** start from the camera's own primary rays and export half-resolution
+irradiance, normals and albedo for scene passes. Shaders include
+`<greenmarine:rays.glsl>`:
 
 ```glsl
 layout(std140) uniform RayFrame {
@@ -47,34 +70,31 @@ layout(std140) uniform RayFrame {
     vec4 RaySun;        // normalized world direction xyz, daylight strength
     vec4 RayOptions;    // ambient, GI strength, scene age seconds (0..1), scene present
 };
-uniform sampler2D RayLighting;    // RGBA16F linear irradiance, alpha=hit
-uniform sampler2D RayNormalDepth; // RGBA32F world normal xyz, reverse depth
-uniform sampler2D RayAlbedo;      // RGBA16F linear atlas color, alpha=hit
+uniform sampler2D RayLighting;    // RGBA16F linear irradiance, alpha = hit
+uniform sampler2D RayNormalDepth; // RGBA32F world normal xyz, reversed depth
+uniform sampler2D RayAlbedo;      // RGBA16F linear atlas colour, alpha = hit
 ```
 
-These initialized bindings are scene-only. Test `marineHardwareRayReady()`.
-Ready textures are half-resolution; unavailable inputs are distinct 1x1 zero
-textures of the corresponding formats. MarineFrame remains exactly 288 bytes.
-The public graph imports are `worldLighting`, `worldNormalDepth`, `worldAlbedo`
-and `FrameContext.worldRaysReady()`. Borrowed textures remain renderer-owned.
+Test `marineHardwareRayReady()` before sampling; unavailable inputs are 1x1 zero
+textures of the same formats. The render-graph imports are `worldLighting`,
+`worldNormalDepth`, `worldAlbedo` and `FrameContext.worldRaysReady()`.
+`examples/aurora-rt` is a small resource-pack example built on world rays
+(`./gradlew exampleShaderpack`).
 
-Exposure, sunStrength, giStrength and blend control the example. Diagnostics:
-0 normal, 1 native albedo, 2 normals, 3 alignment (green matched/red unmatched).
-Filtering operates on irradiance with plane/normal rejection, independent of
-texture color; highlight compression uses a shared scale to preserve hue.
-Sampling patterns are world anchored rather than moving with screen pixels.
+## Resources and timing
 
-Limits: vanilla rasterization/composition remains; entity, fluid and special-renderer geometry are absent from acceleration
-structures. Translucent block models are approximated with alpha tests; transmission
-and refraction are not implemented. Alpha
-silhouettes can mismatch because primary tracing is half resolution with
-mip0 alpha tests. Biome tint/normal/PBR maps are not yet captured. Diffuse samples
-are fixed low count, with spatial filtering and no temporal accumulation;
-this is not multi-bounce path tracing or reflections. Existing baked vanilla
-lighting/fog is modulated rather than physically separated. Other OSes/GPUs,
-device loss and broad shader-mod coexistence remain unverified.
+Steady frames reuse native resources: up to four in-flight submissions each own
+their descriptors, uniforms and per-frame acceleration data, and are reclaimed in
+order as Minecraft's fences complete. Scene replacement, resize and reload may wait
+for the device. Profiling (F6) reports separate CPU and GPU timings for the RT
+stages; they cover RT work, not whole-frame FPS.
 
-Actual captures, moving-camera alignment checks, resource lifecycle regressions
-and separate CPU/GPU timings are recorded in
-`development/evidence/hardware-rt/README.md`. Measurements cover the RT stage,
-not whole-frame FPS or a universal performance promise.
+## Limits
+
+- Translucent blocks are alpha tested; glass transmits sunlight but does not
+  refract rays. No caustics, multi-bounce transport or path tracing.
+- Diffuse lighting uses four fixed directions with spatial filtering, so small
+  occluders give soft, low-frequency GI rather than converged results.
+- Vanilla baked lighting and fog are modulated rather than physically separated.
+- Validation hardware: AMD RX 9070 XT (desktop) and Adreno on Android (Zalith).
+  Other GPUs, operating systems and device-loss recovery are untested.

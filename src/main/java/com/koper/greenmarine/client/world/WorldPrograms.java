@@ -74,6 +74,8 @@ public final class WorldPrograms {
         try {
             var main=renderer.mainRenderTarget();if(main.width<=0 || main.height<=0 || main.getDepthTexture()==null)return;
             var client=Minecraft.getInstance();var camera=renderer.gameRenderState().levelRenderState.cameraRenderState;
+            com.koper.greenmarine.api.external.ExternalRenderers.captureCamera(projection,camera.viewRotationMatrix,camera.pos.x,camera.pos.y,camera.pos.z,
+                RenderSystem.getDevice().getDeviceInfo().isZZeroToOne());
             var encoder=RenderSystem.getDevice().createCommandEncoder();
             if(frame==null)frame=RenderSystem.getDevice().createBuffer(()->"GreenMarine world MarineFrame",GpuBuffer.USAGE_UNIFORM|GpuBuffer.USAGE_COPY_DST,MarineFrame.BYTES);
             if(surface==null)surface=RenderSystem.getDevice().createBuffer(()->"GreenMarine MarineSurfaceFrame",GpuBuffer.USAGE_UNIFORM|GpuBuffer.USAGE_COPY_DST,SURFACE_BYTES);
@@ -223,6 +225,10 @@ public final class WorldPrograms {
                 RenderSystem.bindDefaultUniforms(pass);pass.setUniform("Fog",fog);
                 chunks.renderGroup(ChunkSectionLayerGroup.OPAQUE,pass,sampler,atlas,wireframe);
                 captureWater=true;chunks.renderGroup(ChunkSectionLayerGroup.TRANSLUCENT,pass,sampler,atlas,wireframe);
+                // Last in the pass: external renderers may leave Vulkan state dirty.
+                if(com.koper.greenmarine.api.external.ExternalRenderers.hasMaterialContributors())
+                    com.koper.greenmarine.api.external.ExternalRenderers.drawMaterials(vulkanCommandBuffer(pass),main.width,main.height,
+                        com.mojang.renderpearl.backend.vulkan.VulkanConst.toVk(main.getDepthTexture().getFormat()));
             }
             captureMode=false;surfaceReady=true;
             RayWorld.renderSurface(MATERIALS.normal(),MATERIALS.albedo(),main.width,main.height);
@@ -235,6 +241,11 @@ public final class WorldPrograms {
                 encoder.writeToBuffer(surface.slice(),SURFACE);
             }
         }
+    }
+    private static long vulkanCommandBuffer(RenderPass pass) {
+        if(!(pass instanceof com.koper.greenmarine.mixin.ExternalPassAccessor front)
+            || !(front.greenmarine$backend() instanceof com.koper.greenmarine.mixin.ExternalVulkanPassAccessor vulkan))return 0;
+        var command=vulkan.greenmarine$commandBuffer();return command==null?0:command.address();
     }
     public static GpuBuffer surfaceBindings(CommandEncoder encoder) {
         if(surface==null)surface=RenderSystem.getDevice().createBuffer(()->"GreenMarine MarineSurfaceFrame",GpuBuffer.USAGE_UNIFORM|GpuBuffer.USAGE_COPY_DST,SURFACE_BYTES);

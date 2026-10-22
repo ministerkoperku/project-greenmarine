@@ -14,6 +14,9 @@ public final class NativeRayTracer {
     private volatile String error="RT native module is unavailable";
     private MethodHandle asyncBegin,asyncSubmitted,asyncCompleted,asyncCancel,prepare,publish,discard,sceneAsync,resetAsync,prepareStatusHandle,prepareErrorHandle,asyncStatsHandle;
     private String asyncError="Async RT native module is unavailable";
+    private MethodHandle meshPrepare,meshRelease,externalFrame,externalStats;
+    /** Result of an external mesh upload: token 0 with status 1 means the budget is full. */
+    public record MeshResult(long token,int status,String error) {}
     private volatile int lastPrepareStatus=-2;
     private volatile String lastPrepareError="Async RT native module is unavailable";
     NativeRayTracer(SymbolLookup symbols) {
@@ -51,6 +54,15 @@ public final class NativeRayTracer {
             surfaceActorsExtendedRecord=linker.downcallHandle(symbols.find("greenmarine_surface_rt_record_actors_extended").orElseThrow(),
                 FunctionDescriptor.of(JAVA_INT,JAVA_LONG,ADDRESS,JAVA_INT,JAVA_INT,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,ADDRESS,JAVA_LONG));
         } catch(Throwable unavailable) {surfaceActorsExtendedRecord=null;}
+        try {
+            var linker=Linker.nativeLinker();
+            var version=linker.downcallHandle(symbols.find("greenmarine_rt_external_api_version").orElseThrow(),FunctionDescriptor.of(JAVA_INT));
+            if((int)version.invokeExact()!=1) throw new IllegalStateException("Unsupported external geometry ABI");
+            meshPrepare=linker.downcallHandle(symbols.find("greenmarine_rt_mesh_prepare").orElseThrow(),FunctionDescriptor.of(JAVA_LONG,ADDRESS,JAVA_INT));
+            meshRelease=serialCall(linker,symbols,"greenmarine_rt_mesh_release");
+            externalFrame=linker.downcallHandle(symbols.find("greenmarine_rt_external_frame").orElseThrow(),FunctionDescriptor.of(JAVA_INT,ADDRESS,ADDRESS,JAVA_INT));
+            externalStats=linker.downcallHandle(symbols.find("greenmarine_rt_external_stats").orElseThrow(),FunctionDescriptor.of(JAVA_INT,ADDRESS,JAVA_INT));
+        } catch(Throwable unavailable) {meshPrepare=meshRelease=externalFrame=externalStats=null;}
         try {
             var linker=Linker.nativeLinker();
             var version=linker.downcallHandle(symbols.find("greenmarine_rt_async_api_version").orElseThrow(),FunctionDescriptor.of(JAVA_INT));
@@ -236,4 +248,42 @@ public final class NativeRayTracer {
         } catch(Throwable failed) {asyncError=error=failed.toString();return new long[14];}
     }
 
+    public static final int MAX_EXTERNAL_INSTANCES=512, MAX_EXTERNAL_MESH_TRIANGLES=262_144;
+    public boolean externalAvailable() {return surfaceAvailable() && meshPrepare!=null && prepareStatusHandle!=null;}
+    /** Any thread; uploads mesh-local triangles (scene ABI) and records a BLAS build for later. */
+    public MeshResult prepareMesh(ByteBuffer data,int triangles) {
+        if(!externalAvailable())return new MeshResult(0,-2,"External geometry native module is unavailable");
+        if(!data.isDirect() || triangles<1 || triangles>MAX_EXTERNAL_MESH_TRIANGLES || data.remaining()!=(long)triangles*96)
+            throw new IllegalArgumentException("Invalid external mesh ABI");
+        try {
+            long token=(long)meshPrepare.invokeExact(MemorySegment.ofBuffer(data),triangles);
+            int status=(int)prepareStatusHandle.invokeExact();
+            var pointer=(MemorySegment)prepareErrorHandle.invokeExact();
+            return new MeshResult(token,status,pointer.address()==0?"":pointer.reinterpret(16384).getString(0));
+        } catch(Throwable failed) {return new MeshResult(0,-3,failed.toString());}
+    }
+    /** In-flight recordings keep their own references; release only forgets the token. */
+    public int releaseMesh(long token) {
+        if(meshRelease==null)return -2;
+        try {return (int)meshRelease.invokeExact(token);} catch(Throwable failed) {return -3;}
+    }
+    /** Render thread. Row-major 3x4 transforms relative to the published scene origin; -23 names a stale token. */
+    public int externalFrame(long[] tokens,float[] transforms,int count) {
+        if(externalFrame==null)return -2;
+        if(count<0 || count>MAX_EXTERNAL_INSTANCES || tokens.length<count || transforms.length<count*12)
+            throw new IllegalArgumentException("Invalid external frame");
+        try(var arena=Arena.ofConfined()) {
+            var ids=arena.allocate(JAVA_LONG,Math.max(1,count));var matrices=arena.allocate(JAVA_FLOAT,Math.max(1,count*12));
+            MemorySegment.copy(tokens,0,ids,JAVA_LONG,0,count);MemorySegment.copy(transforms,0,matrices,JAVA_FLOAT,0,count*12);
+            return (int)externalFrame.invokeExact(ids,matrices,count);
+        } catch(Throwable failed) {surfaceError=failed.toString();return -3;}
+    }
+    /** Registered meshes, their bytes, instances queued for the next recording. */
+    public long[] externalStats() {
+        if(externalStats==null)return new long[3];
+        try(var arena=Arena.ofConfined()) {
+            var out=arena.allocate(JAVA_LONG,3);
+            return (int)externalStats.invokeExact(out,3)==0?out.toArray(JAVA_LONG):new long[3];
+        } catch(Throwable failed) {return new long[3];}
+    }
 }

@@ -4,7 +4,21 @@ Updated 2026-10-15 for 0.7.0-prototype. This file preserves the
 owner's next direction across sessions. Read the current source before treating
 any historical report as a new bug.
 
-## Current 0.9.5 release-prep delivery (2026-10-22)
+## Current 0.9.6 external renderer API (2026-10-22)
+
+Owner will integrate KoperLib Kender on their PC with the newest local koperlib
+(not on GitHub); GreenMarine must not edit koperlib and must not hand Kender back
+to the MC render path (that disables Kender). Added `api.external.ExternalRenderers`:
+native external meshes (per-mesh BLAS, per-flight instance TLAS rebuilt per
+recording, buffer_reference triangle table at surface binding 9, tint-only uv2.z=2),
+a raw VkCommandBuffer hook at the end of the material capture pass, and RT output
+views. Contract: `docs/EXTERNAL-RENDERERS.md`. Rust contract tests pass; the GPU
+acceptance test `surface_gpu_external_meshes_reflect_shadow_move_and_survive_flights`
+must run on the owner's RX 9070 XT (lavapipe here crashes in AS builds even on
+the pre-change baseline). Docs were rewritten to current state; history moved to
+CHANGELOG.md. Java255/Python59/Rust16.
+
+## Previous 0.9.5 release-prep delivery (2026-10-22)
 
 Owner log (mclo.gs/gT3fQ6M, Sodium 0.9.3 + KoperLib + KAvatar) showed 0.9.4 lost
 the whole player reflection: ActorAtlas used `withLocation(String)`, which adds
