@@ -1,6 +1,6 @@
 # Planned features
 
-The original project goals, as set out by the author in `readme.txt`, with the
+The original project goals, as set out by the author, with the
 current state of each. Status reflects version 0.9.6.
 
 ## Goal

@@ -64,5 +64,5 @@ Needs Java 25, Rust and `glslangValidator`. Android builds and GPU tests:
 
 No license has been chosen yet; until one is, all rights are reserved by the author.
 Bundled third-party components keep their own licenses
-([third-party notices](docs/THIRD-PARTY.md)). `readme.txt` is the original project
-concept, kept as written; [planned features](PLANNED-FEATURES.md) is its structured version.
+([third-party notices](docs/THIRD-PARTY.md)). The original project goals are in
+[planned features](PLANNED-FEATURES.md).

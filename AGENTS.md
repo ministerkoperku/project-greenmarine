@@ -39,5 +39,5 @@ must both support the path. Benchmark CPU and GPU costs separately.
 Use `./gradlew test build` and `cargo test` in `engine/`; finish Rust changes
 with `cargo build --release`. Runtime rendering evidence is separate from
 compilation. Public documentation lives in `docs/`, plans and evidence in
-`development/`. Keep new text English and preserve `readme.txt` as original
-owner material. Never replace installed game jars during development.
+`development/`. Keep new text English; the owner's original goals live in `PLANNED-FEATURES.md`.
+Never replace installed game jars during development.
