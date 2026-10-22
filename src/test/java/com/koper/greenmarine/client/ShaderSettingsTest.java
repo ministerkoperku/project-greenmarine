@@ -7,6 +7,18 @@ import java.nio.file.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ShaderSettingsTest {
+    @Test void profilingAndParametersDoNotRebuildRendererResources() {
+        var previous=new ShaderSettings("greenmarine:solstice_rt",Quality.HIGH,RayMode.HARDWARE,false);
+        assertFalse(new ShaderSettings(previous.pack(),previous.quality(),previous.rays(),true).requiresRendererRebuild(previous));
+        assertFalse(previous.withParameter(previous.pack(),"exposure",1.2f).requiresRendererRebuild(previous));
+        assertTrue(new ShaderSettings(previous.pack(),Quality.MEDIUM,previous.rays(),false).requiresRendererRebuild(previous));
+        assertTrue(new ShaderSettings(previous.pack(),previous.quality(),RayMode.OFF,false).requiresRendererRebuild(previous));
+        assertTrue(new ShaderSettings("greenmarine:raster",previous.quality(),previous.rays(),false).requiresRendererRebuild(previous));
+    }
+    @Test void newSettingsChooseRasterWithoutRayWork() {
+        assertEquals("greenmarine:raster", ShaderSettings.defaults().pack());
+        assertEquals(RayMode.OFF, ShaderSettings.defaults().rays());
+    }
     @TempDir Path directory;
     @Test void persistsPackQualityRayModeAndProfiling() throws Exception {
         var path = directory.resolve("shaders.json");
@@ -49,5 +61,12 @@ class ShaderSettingsTest {
             assertTrue(ShaderRuntime.previewParameter(pack.id(),"gain",2));
             assertEquals(2f,ShaderRuntime.settings().overridesFor(pack).get("gain"));
         }
+    }
+    @Test void retiredDemoPackSelectionMigratesToTheDefaultPackAndKeepsOtherSettings() throws Exception {
+        var path=directory.resolve("retired.json");
+        Files.writeString(path,"{\"pack\":\"greenmarine:radiance\",\"quality\":\"high\",\"rays\":\"voxel\",\"profiling\":true}");
+        var loaded=ShaderSettings.load(path,ShaderSettings.defaults());
+        assertEquals(ShaderSettings.defaults().pack(),loaded.pack());
+        assertEquals(Quality.HIGH,loaded.quality());assertEquals(RayMode.VOXEL,loaded.rays());assertTrue(loaded.profiling());
     }
 }

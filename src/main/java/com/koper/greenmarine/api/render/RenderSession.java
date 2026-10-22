@@ -47,8 +47,23 @@ public final class RenderSession implements AutoCloseable {
         }
     }
     public Mesh mesh(String label, com.mojang.renderpearl.api.vertex.VertexFormat format, int vertices, ByteBuffer data) {
-        scope.check(); Mesh.validate(format.getVertexSize(), vertices, data.remaining());
+        scope.check();
+        if(format.getStepRate()!=0)throw new IllegalArgumentException("Mesh requires a per-vertex binding");
+        Mesh.validate(format.getVertexSize(), vertices, data.remaining());
         return new Mesh(this, format, vertices, buffer(label, GpuBuffer.USAGE_VERTEX, data));
+    }
+    /** Indices are unsigned SHORT/INT in native byte order; positions and limits are preserved. */
+    public Mesh indexedMesh(String label,com.mojang.renderpearl.api.vertex.VertexFormat format,int vertices,ByteBuffer vertexData,
+                            com.mojang.renderpearl.api.pipeline.IndexType type,ByteBuffer indexData) {
+        scope.check();
+        if(format.getStepRate()!=0)throw new IllegalArgumentException("Mesh requires a per-vertex binding");
+        Mesh.validateVertices(format.getVertexSize(),vertices,vertexData.remaining());
+        int count=Mesh.validateIndices(vertices,type,indexData);
+        var vertexBuffer=buffer(label+" vertices",GpuBuffer.USAGE_VERTEX,vertexData);
+        try {
+            var indexBuffer=buffer(label+" indices",GpuBuffer.USAGE_INDEX,indexData);
+            return new Mesh(this,format,vertices,vertexBuffer,indexBuffer,type,count);
+        } catch(RuntimeException|Error error) {vertexBuffer.close();throw error;}
     }
     public GraphExecution graph(RenderGraph graph) { scope.check(); return new GraphExecution(this, graph); }
     @Override public void close() { scope.close(); }

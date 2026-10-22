@@ -1,5 +1,37 @@
 # World shader programs (0.6)
 
+## Consistent scene depth (0.8.8)
+
+Enabled GreenMarine effects request Minecraft's `consistentDepthRequired` flag
+before `LevelRenderer` constructs its frame graph. Always-on-top gizmos then
+render into Minecraft's separate gizmo depth attachment and integrate it, rather
+than clearing world depth before GreenMarine post processing. This applies to
+any gizmo producer, including connector overlays, without linking its mod/API.
+Existing host requirements remain enabled when GreenMarine is toggled off.
+Minecraft retains ownership of all gizmo targets and their frame-graph lifetime.
+
+Regression tests cover the enable/disable/re-enable matrix and verify the mixin
+selector/argument against actual 26.3 bytecode. The owner's complete camera-motion
+artifact still requires gameplay confirmation; these tests do not render a game.
+
+## Background stage (0.8.6)
+
+An optional `{"target":"background","vertex":"demo:core/background","fragment":"demo:core/background"}`
+program draws a fullscreen triangle after opaque geometry and before deferred
+classic/OIT transparency. Its color target is the actual host format. Reversed
+depth uses EQUAL against clear depth zero, without depth writes or attachment
+clears, so opaque terrain/entities remain intact. The vertex program must emit
+clip Z 0 for zero-to-one hosts and -1 otherwise (`Context.x`), with W 1.
+The host supplies `MarineFrame`, `MarineSurfaceFrame` and `MarineEnvironment`.
+This stage has no sampled color/depth inputs and rejects ray/surface-capture flags.
+Resource ownership and failure/reset behavior follow the world-program lifecycle.
+
+Solstice uses this stage for its single procedural sky/cloud layer. Its original
+Overworld sky/cloud fragments discard host geometry; other packs and global
+Minecraft cloud settings are unaffected. The scene pass no longer decides sky
+coverage from pixel brightness. Custom background shaders should explicitly gate
+dimensions in which they do not replace the sky.
+
 Schema 1 now optionally declares actual world vertex/fragment programs alongside
 its existing fullscreen and lightmap passes. The original `ShaderPack` constructor,
 parameter order, MarineFrame 288-byte block, existing packs and native ABI remain
@@ -133,3 +165,14 @@ selection. Replay targets, environment inputs, independent readiness, shader
 layouts and the finite native scene are documented in
 [surface rendering](SURFACE-RENDERING.md). Solstice RT demonstrates this contract;
 existing Seabreeze and other world programs keep their old behavior.
+
+`surfaceBeforeTerrain: true` optionally moves that program's replay and native
+surface dispatch before opaque terrain color drawing. Replay clears its private
+depth rather than copying entity visibility from the main image. This allows
+surface-local native shading and avoids late reflection composition over entities.
+The flag requires a terrain `surface` program. Old constructors and manifests
+retain late capture except the shipped `greenmarine:core/solstice_terrain` and
+`greenmarine:core/solstice_surface` pair, which defaults to early capture regardless
+of pack ID. Custom shaders reusing the surface-local include under their own
+resource names should opt in explicitly. The 8-argument `PackProgram` constructor
+also accepts the flag; all prior constructor signatures remain available.

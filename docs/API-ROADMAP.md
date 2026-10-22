@@ -15,6 +15,20 @@ Solstice/Seabreeze; its rendered device acceptance remains pending.
 See [installation](ANDROID-ZALITH.md) and
 [verification evidence](../development/2026-10-17-android.md).
 
+## 0.9.0 delivery update
+
+Indexed/instanced contribution draws and opt-in transient graph allocation reuse
+are implemented with ownership/range/lifetime tests. Existing graph texture
+storage remains persistent unless explicitly marked transient. New settings expose
+paginated pack/quality/ray controls and cached CPU/GPU stage timings. Repeated
+world binding updates are skipped when pipeline/frame/capture state matches;
+profiling no longer rebuilds scenes/programs/scripts.
+
+These close portions of the mesh, allocation and diagnostics backlog. General
+compute/storage resources, complete scene/material capture, PBR texture loading,
+world shadow maps and volumetric cloud rendering remain unimplemented platform
+work. No comparative FPS advantage is established by this release.
+
 ## Current foundation
 
 GreenMarine already exports session-owned GPU buffers/textures/programs,

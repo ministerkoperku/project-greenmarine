@@ -15,10 +15,13 @@ public final class RenderGraph {
     }
     private final Map<String, TextureSpec> textures;
     private final Set<String> imports;
+    private final Set<String> transientTextures;
     private final List<Pass> passes;
+    private final GraphAllocationPlan allocationPlan;
     private RenderGraph(Builder builder) {
         textures = Collections.unmodifiableMap(new LinkedHashMap<>(builder.textures));
         imports = Set.copyOf(builder.imports);
+        transientTextures = Set.copyOf(builder.transientTextures);
         var byId = new LinkedHashMap<String, Pass>();
         var writers = new HashMap<String, String>();
         for (var p : builder.passes) {
@@ -55,19 +58,27 @@ public final class RenderGraph {
             edges.values().forEach(deps -> deps.remove(next));
         }
         passes = List.copyOf(order);
+        allocationPlan = new GraphAllocationPlan(textures, transientTextures, passes);
     }
     private static Set<String> union(Set<String> a, Set<String> b) { var result = new HashSet<>(a); result.addAll(b); return result; }
     static void name(String name) { if (name == null || name.isBlank()) throw new IllegalArgumentException("Empty graph name"); }
     public Map<String, TextureSpec> textures() { return textures; }
     public Set<String> imports() { return imports; }
+    public Set<String> transientTextures() { return transientTextures; }
     public List<Pass> passes() { return passes; }
+    public GraphAllocationPlan allocationPlan() { return allocationPlan; }
     public static Builder builder() { return new Builder(); }
     public static final class Builder {
         private final Map<String, TextureSpec> textures = new LinkedHashMap<>();
         private final Set<String> imports = new LinkedHashSet<>();
+        private final Set<String> transientTextures = new LinkedHashSet<>();
         private final List<Pass> passes = new ArrayList<>();
         public Builder texture(String name, TextureSpec spec) {
             unique(name); textures.put(name, Objects.requireNonNull(spec)); return this;
+        }
+        /** Opt-in pass-scoped storage: contents may be overwritten after the last declared use. */
+        public Builder transientTexture(String name, TextureSpec spec) {
+            texture(name, spec); transientTextures.add(name); return this;
         }
         public Builder importTexture(String name) { unique(name); imports.add(name); return this; }
         private void unique(String name) {

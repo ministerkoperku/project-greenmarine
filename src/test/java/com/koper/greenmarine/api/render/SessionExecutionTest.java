@@ -13,6 +13,22 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SessionExecutionTest {
     @org.junit.jupiter.api.BeforeAll static void hostThread() { RenderTestHost.initialize(); }
+    @Test void explicitlyTransientTexturesReuseOneActualAllocationAcrossPassesAndResize() {
+        var gpu=new TestGpu();var session=new RenderSession(gpu.device);
+        var borrowed=gpu.texture("borrowed",GpuFormat.RGBA8_UNORM,4,4);
+        var used=new ArrayList<GpuTexture>();
+        var spec=TextureSpec.scaled(GpuFormat.RGBA8_UNORM,1);
+        var execution=session.graph(RenderGraph.builder().transientTexture("a",spec).transientTexture("b",spec)
+            .pass(new RenderGraph.Pass("first",Set.of(),Set.of("a"),Set.of(),ctx->used.add(ctx.write("a").texture())))
+            .pass(new RenderGraph.Pass("consume",Set.of("a"),Set.of(),Set.of(),ctx->ctx.read("a")))
+            .pass(new RenderGraph.Pass("second",Set.of(),Set.of("b"),Set.of("consume"),ctx->used.add(ctx.write("b").texture()))).build());
+        execution.execute(frame(4,borrowed));
+        assertSame(used.get(0),used.get(1));assertEquals(1,session.stats().textureAllocations());
+        execution.execute(frame(4,borrowed));assertEquals(1,session.stats().textureAllocations());
+        execution.execute(frame(8,borrowed));assertEquals(2,session.stats().textureAllocations());
+        assertEquals(1,gpu.closedTextures);session.close();assertEquals(2,gpu.closedTextures);
+        assertFalse(borrowed.texture().isClosed());
+    }
     @Test void reusesFixedResourcesAcrossResizeAndNeverDestroysBorrowedImports() {
         var gpu = new TestGpu(); var session = new RenderSession(gpu.device);
         var borrowed = gpu.texture("borrowed", GpuFormat.RGBA8_UNORM, 4, 4);

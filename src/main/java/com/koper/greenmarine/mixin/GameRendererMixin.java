@@ -28,6 +28,13 @@ public abstract class GameRendererMixin {
         com.koper.greenmarine.api.render.MarineRenderer.render(com.koper.greenmarine.api.render.MarineRenderer.Stage.AFTER_PACKS, (GameRenderer)(Object)this);
     }
 
+    // Always-on-top gizmos otherwise clear the world's depth before our post effects.
+    // Let Minecraft allocate and integrate its separate gizmo depth attachment.
+    @ModifyArg(method = "renderLevel", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/LevelRenderer;render(Lcom/mojang/blaze3d/resource/GraphicsResourceAllocator;ZLnet/minecraft/client/renderer/state/level/CameraRenderState;Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;Lorg/joml/Vector4f;ZZ)V"), index = 6, require = 1)
+    private boolean greenmarine$consistentDepth(boolean required) {
+        return required || GreenMarineClient.enabled();
+    }
+
     @ModifyArg(method = "renderLevel", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/renderer/ProjectionMatrixBuffer;getBuffer(Lorg/joml/Matrix4f;)Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;"), index = 0)
     private Matrix4f greenmarine$projection(Matrix4f projection) {
         com.koper.greenmarine.api.render.MarineRenderer.captureProjection(projection);

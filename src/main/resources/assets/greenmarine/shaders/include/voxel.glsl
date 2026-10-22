@@ -19,7 +19,7 @@ bool marineVoxelOccupied(ivec3 cell) {
     int index=marineVoxelIndex(cell),word=index/32;
     return (VoxelOccupancy[word/4][word%4] & (1u<<uint(index%32)))!=0u;
 }
-MarineVoxelHit marineVoxelTrace(vec3 origin,vec3 direction,float maxDistance) {
+MarineVoxelHit marineVoxelTrace(vec3 origin,vec3 direction,float maxDistance,bool occupancyOnly) {
     MarineVoxelHit result=MarineVoxelHit(false,vec4(0.0),vec3(0.0),0.0);
     if(VoxelTracing.x<0.5 || maxDistance<=0.0 || dot(direction,direction)<0.000001) return result;
     direction=normalize(direction);vec3 local=origin-VoxelOriginSize.xyz;
@@ -44,7 +44,7 @@ MarineVoxelHit marineVoxelTrace(vec3 origin,vec3 direction,float maxDistance) {
     for(int iteration=0;iteration<96;iteration++) {
         if(!marineVoxelInside(cell)) break;
         vec4 material=marineVoxelMaterial(cell);
-        if(marineVoxelOccupied(cell) || material.a>0.0) {
+        if(marineVoxelOccupied(cell) || (!occupancyOnly && material.a>0.0)) {
             result=MarineVoxelHit(true,material,VoxelOriginSize.xyz+vec3(cell)+0.5,distance);break;
         }
         float crossing=min(next.x,min(next.y,next.z));
@@ -53,5 +53,8 @@ MarineVoxelHit marineVoxelTrace(vec3 origin,vec3 direction,float maxDistance) {
         distance=crossing;
     }
     return result;
+}
+MarineVoxelHit marineVoxelTrace(vec3 origin,vec3 direction,float maxDistance) {
+    return marineVoxelTrace(origin,direction,maxDistance,false);
 }
 #endif

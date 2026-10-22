@@ -68,7 +68,7 @@ class SolsticeShadersTest(unittest.TestCase):
         for parameter in pack['parameters'].values():
             self.assertLessEqual(parameter['min'], parameter['default'])
             self.assertGreaterEqual(parameter['max'], parameter['default'])
-        self.assertEqual({p['target'] for p in pack['programs']}, {'terrain', 'sky', 'clouds'})
+        self.assertEqual({p['target'] for p in pack['programs']}, {'terrain', 'sky', 'clouds', 'background'})
         terrain = next(p for p in pack['programs'] if p['target'] == 'terrain')
         self.assertIn('surface', terrain)
         for program in pack['programs']:
@@ -94,7 +94,7 @@ class SolsticeShadersTest(unittest.TestCase):
                     continue
                 namespace, name = program[field].split(':')
                 path = ASSETS / namespace / 'shaders' / (name + suffix)
-                for defines in variants if program['target'] != 'sky' else [()]:
+                for defines in variants if program['target'] not in ('sky', 'background') else [()]:
                     for backend in ['vulkan', 'opengl']:
                         with self.subTest(program=program['target'], field=field, defines=defines, backend=backend):
                             code, output = compile_shader(path, stage, defines, backend)

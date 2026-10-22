@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "greenmarine:raster",
+  "name": "Marine Raster",
+  "parameters": {
+    "waves": {"default": 0.7, "min": 0, "max": 2},
+    "refraction": {"default": 0.8, "min": 0, "max": 3},
+    "absorption": {"default": 1, "min": 0, "max": 3},
+    "exposure": {"default": 1.05, "min": 0.25, "max": 2},
+    "reflection": {"default": 0.8, "min": 0, "max": 1},
+    "sunStrength": {"default": 1, "min": 0, "max": 3},
+    "reservedRayBlend": {"default": 0, "min": 0, "max": 0},
+    "waterOpacity": {"default": 0.82, "min": 0.1, "max": 1},
+    "reservedGiStrength": {"default": 0, "min": 0, "max": 0},
+    "waveDiagnostic": {"default": 0, "min": 0, "max": 1}
+  },
+  "passes": [],
+  "programs": [
+    {"target": "terrain", "vertex": "greenmarine:core/seabreeze_terrain", "fragment": "greenmarine:core/raster_terrain"},
+    {"target": "sky", "fragment": "greenmarine:core/seabreeze_sky"},
+    {"target": "clouds", "fragment": "greenmarine:core/seabreeze_clouds"}
+  ]
+}

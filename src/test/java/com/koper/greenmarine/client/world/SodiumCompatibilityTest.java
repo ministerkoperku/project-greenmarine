@@ -13,6 +13,10 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SodiumCompatibilityTest {
+    @Test void supportsBuiltinRasterTerrain() {
+        assertTrue(SodiumCompatibility.supports(new PackProgram(PackProgram.Target.TERRAIN,
+            "greenmarine:core/seabreeze_terrain", "greenmarine:core/raster_terrain", false)));
+    }
     static RenderPipeline host() {
         return hostBuilder(true).build();
     }

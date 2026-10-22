@@ -8,6 +8,19 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldPipelineTest {
+    @Test void materialExtensionIsBoundAndRejectsHostNameConflicts() {
+        var program=new PackProgram(PackProgram.Target.TERRAIN,"test:world","test:world",true);
+        var source=RenderPipelines.OPAQUE_PARTICLE;
+        var decorated=WorldPipeline.decorate(source,program,Identifier.parse("test:extension"));
+        assertTrue(BindGroupLayout.flattenUniforms(decorated.getBindGroupLayouts()).stream()
+            .anyMatch(u->u.name().equals("MarineMaterialExtension") && u.type()==UniformType.UNIFORM_BUFFER));
+        var conflicting=RenderPipeline.builder().withLocation(Identifier.parse("test:conflict"))
+            .withVertexShader(Identifier.parse("test:world")).withFragmentShader(Identifier.parse("test:world"))
+            .withPrimitiveTopology(PrimitiveTopology.TRIANGLES)
+            .withBindGroupLayout(BindGroupLayout.builder().withUniform("MarineMaterialExtension",UniformType.UNIFORM_BUFFER).build()).build();
+        assertThrows(IllegalArgumentException.class,()->WorldPipeline.decorate(conflicting,program,Identifier.parse("test:bad")));
+    }
+
     @Test void surfaceCaptureUsesNearestDepthAndIndependentUnblendedAttachments() {
         var program=new PackProgram(PackProgram.Target.TERRAIN,"test:world","test:world",true,"test:surface");
         for(var source:RenderPipelines.requiredPipelines()) {

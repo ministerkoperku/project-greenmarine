@@ -16,6 +16,9 @@ struct Host {
 }
 impl Host {
     unsafe fn new() -> Self {
+        Self::new_with_ray(true)
+    }
+    unsafe fn new_with_ray(require_ray: bool) -> Self {
         let entry = Entry::load().expect("Vulkan loader");
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_2);
         let instance = entry
@@ -29,6 +32,9 @@ impl Host {
             .unwrap()
             .into_iter()
             .find(|&p| {
+                if !require_ray {
+                    return true;
+                }
                 let props = instance.get_physical_device_properties(p);
                 CStr::from_ptr(props.device_name.as_ptr())
                     .to_string_lossy()
@@ -62,15 +68,16 @@ impl Host {
             ash::khr::ray_query::NAME.as_ptr(),
         ];
         let mut acceleration = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
-            .acceleration_structure(true);
-        let mut ray = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(true);
-        let mut v12 = vk::PhysicalDeviceVulkan12Features::default().buffer_device_address(true);
+            .acceleration_structure(require_ray);
+        let mut ray = vk::PhysicalDeviceRayQueryFeaturesKHR::default().ray_query(require_ray);
+        let mut v12 =
+            vk::PhysicalDeviceVulkan12Features::default().buffer_device_address(require_ray);
         let device = instance
             .create_device(
                 physical,
                 &vk::DeviceCreateInfo::default()
                     .queue_create_infos(&queue_info)
-                    .enabled_extension_names(&extensions)
+                    .enabled_extension_names(if require_ray { &extensions } else { &[] })
                     .push_next(&mut acceleration)
                     .push_next(&mut ray)
                     .push_next(&mut v12),
@@ -304,6 +311,19 @@ unsafe fn readback(
     width: u32,
     height: u32,
 ) -> [Vec<[f32; 4]>; 2] {
+    readback_actors(host, ray, frame, outputs, views, width, height, None)
+}
+#[allow(clippy::too_many_arguments)]
+unsafe fn readback_actors(
+    host: &Host,
+    ray: &mut RayState,
+    frame: &[f32; 80],
+    outputs: &[Image; 2],
+    views: [u64; 3],
+    width: u32,
+    height: u32,
+    actors: Option<(&[f32], u64)>,
+) -> [Vec<[f32; 4]>; 2] {
     let count = width as usize * height as usize;
     let buffers = [
         Buffer::new(
@@ -328,14 +348,20 @@ unsafe fn readback(
     for image in outputs {
         image.clear(host.command, [-3.0; 4]);
     }
-    ray.record_surface(
-        host.command,
-        frame,
-        width,
-        height,
-        [outputs[0].handle, outputs[1].handle],
-        views,
-    )
+    let images = [outputs[0].handle, outputs[1].handle];
+    match actors {
+        Some((payload, skin)) => ray.record_surface_actors(
+            host.command,
+            frame,
+            width,
+            height,
+            images,
+            views,
+            payload,
+            skin,
+        ),
+        None => ray.record_surface(host.command, frame, width, height, images, views),
+    }
     .unwrap();
     for (i, image) in outputs.iter().enumerate() {
         host.device.cmd_copy_image_to_buffer(
@@ -742,6 +768,15 @@ fn surface_gpu_offscreen_reflection_shadow_odd_dimensions_and_scene_reset() {
         println!("surface_gpu clear center_lighting={:?} center_reflection={:?} reflected_hits={} written_pixels=35 dimensions=7x5",
         clear[0][center],clear[1][center],clear[1].iter().filter(|p|p[3]==1.0).count());
         host.begin();
+        capture_albedo.clear(host.command, [0.1, 0.2, 0.3, 9.05]);
+        ray.barrier(host.command);
+        host.submit();
+        let coated_material = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(
+            coated_material, clear,
+            "coated dielectric class 9 must receive native reflection radiance"
+        );
+        host.begin();
         capture_albedo.clear(host.command, [0.1, 0.2, 0.3, 1.05]);
         ray.barrier(host.command);
         host.submit();
@@ -1065,6 +1100,27 @@ fn async_gpu_retains_generations_and_reclaims_only_completed_fifo_flights() {
             "pending world descriptor sets cannot alias"
         );
         assert!(
+            pool.slots[0]
+                .state
+                .surface
+                .as_ref()
+                .unwrap()
+                .actors
+                .as_ref()
+                .unwrap()
+                .handle
+                != pool.slots[1]
+                    .state
+                    .surface
+                    .as_ref()
+                    .unwrap()
+                    .actors
+                    .as_ref()
+                    .unwrap()
+                    .handle,
+            "pending actor payload buffers cannot alias"
+        );
+        assert!(
             pool.slots[0].state.surface.as_ref().unwrap().set
                 != pool.slots[1].state.surface.as_ref().unwrap().set,
             "pending surface descriptor sets cannot alias"
@@ -1125,5 +1181,430 @@ fn async_gpu_retains_generations_and_reclaims_only_completed_fifo_flights() {
         );
         println!("async_gpu flights=7 bounded_slots={} Busy=1 retired_after_completion=0 idle_delta=0 old_reflection={:?} new_reflection={:?}",
         ray.async_stats()[2],av[1][center],bv[1][center]);
+    }
+}
+
+fn actor_box_payload(inverse: [f32; 16], transparent_entry: bool) -> [f32; ACTOR_FLOATS] {
+    let mut data = [0.; ACTOR_FLOATS];
+    data[0] = 1.;
+    data[4..20].copy_from_slice(&inverse);
+    data[24..27].fill(1.);
+    for face in 0..6 {
+        data[4 + 24 + face * 4 + 3] = if face == 0 && transparent_entry {
+            0.75
+        } else {
+            0.25
+        };
+        data[4 + 48 + face * 4 + 3] = 0.5;
+    }
+    data
+}
+// Runs the production actor GLSL without requiring ray-query hardware. This
+// isolates slab distances, entry/exit alpha, UVs and normals from triangle tracing.
+unsafe fn actor_compute(host: &Host, actors: &[f32], queries: &[[f32; 8]]) -> Vec<[f32; 8]> {
+    let full = if actors.len() == ACTOR_FLOATS {
+        expand_surface_actors(actors).unwrap()
+    } else {
+        validate_surface_actors_extended(actors).unwrap();
+        actors.try_into().unwrap()
+    };
+    let actor_buffer = Buffer::new(
+        &host.device,
+        &host.memory,
+        (EXTENDED_ACTOR_FLOATS * 4) as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        true,
+    )
+    .unwrap();
+    actor_buffer.upload(&full).unwrap();
+    let query_buffer = Buffer::new(
+        &host.device,
+        &host.memory,
+        std::mem::size_of_val(queries) as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        true,
+    )
+    .unwrap();
+    query_buffer.upload(queries).unwrap();
+    let output = Buffer::new(
+        &host.device,
+        &host.memory,
+        (queries.len() * 32) as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        true,
+    )
+    .unwrap();
+    let skin = Image::new(host, 2, 1, vk::Format::R32G32B32A32_SFLOAT, true);
+    host.begin();
+    skin.initialize(host.command, [0.; 4]);
+    host.submit();
+    upload_capture(
+        host,
+        &skin,
+        2,
+        1,
+        &[[0.8, 0.2, 0.1, 1.], [0.1, 0.9, 0.2, 0.]],
+    );
+    let bindings: Vec<_> = [
+        (0, vk::DescriptorType::STORAGE_BUFFER),
+        (1, vk::DescriptorType::STORAGE_BUFFER),
+        (7, vk::DescriptorType::STORAGE_BUFFER),
+        (8, vk::DescriptorType::COMBINED_IMAGE_SAMPLER),
+    ]
+    .into_iter()
+    .map(|(binding, ty)| {
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(binding)
+            .descriptor_type(ty)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+    })
+    .collect();
+    let layout = host
+        .device
+        .create_descriptor_set_layout(
+            &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
+            None,
+        )
+        .unwrap();
+    let sizes = [
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::STORAGE_BUFFER,
+            descriptor_count: 3,
+        },
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: 1,
+        },
+    ];
+    let pool = host
+        .device
+        .create_descriptor_pool(
+            &vk::DescriptorPoolCreateInfo::default()
+                .max_sets(1)
+                .pool_sizes(&sizes),
+            None,
+        )
+        .unwrap();
+    let set = host
+        .device
+        .allocate_descriptor_sets(
+            &vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(pool)
+                .set_layouts(&[layout]),
+        )
+        .unwrap()[0];
+    for (binding, buffer) in [(0, &output), (1, &query_buffer), (7, &actor_buffer)] {
+        let info = [vk::DescriptorBufferInfo::default()
+            .buffer(buffer.handle)
+            .range(buffer.size)];
+        host.device.update_descriptor_sets(
+            &[vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(binding)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&info)],
+            &[],
+        );
+    }
+    let sampler = host
+        .device
+        .create_sampler(
+            &vk::SamplerCreateInfo::default()
+                .mag_filter(vk::Filter::NEAREST)
+                .min_filter(vk::Filter::NEAREST)
+                .max_lod(0.),
+            None,
+        )
+        .unwrap();
+    let info = [vk::DescriptorImageInfo::default()
+        .sampler(sampler)
+        .image_view(skin.view)
+        .image_layout(vk::ImageLayout::GENERAL)];
+    host.device.update_descriptor_sets(
+        &[vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(8)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&info)],
+        &[],
+    );
+    let pipeline_layout = host
+        .device
+        .create_pipeline_layout(
+            &vk::PipelineLayoutCreateInfo::default().set_layouts(&[layout]),
+            None,
+        )
+        .unwrap();
+    let binary = include_bytes!("../shaders/surface_actors_test.spv");
+    let words: Vec<u32> = binary
+        .chunks_exact(4)
+        .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+        .collect();
+    let module = host
+        .device
+        .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
+        .unwrap();
+    let name = std::ffi::CString::new("main").unwrap();
+    let pipeline = host
+        .device
+        .create_compute_pipelines(
+            vk::PipelineCache::null(),
+            &[vk::ComputePipelineCreateInfo::default()
+                .layout(pipeline_layout)
+                .stage(
+                    vk::PipelineShaderStageCreateInfo::default()
+                        .stage(vk::ShaderStageFlags::COMPUTE)
+                        .module(module)
+                        .name(&name),
+                )],
+            None,
+        )
+        .unwrap()[0];
+    host.device.destroy_shader_module(module, None);
+    host.begin();
+    host.device
+        .cmd_bind_pipeline(host.command, vk::PipelineBindPoint::COMPUTE, pipeline);
+    host.device.cmd_bind_descriptor_sets(
+        host.command,
+        vk::PipelineBindPoint::COMPUTE,
+        pipeline_layout,
+        0,
+        &[set],
+        &[],
+    );
+    host.device
+        .cmd_dispatch(host.command, queries.len() as u32, 1, 1);
+    host.device.cmd_pipeline_barrier(
+        host.command,
+        vk::PipelineStageFlags::COMPUTE_SHADER,
+        vk::PipelineStageFlags::HOST,
+        vk::DependencyFlags::empty(),
+        &[vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::HOST_READ)],
+        &[],
+        &[],
+    );
+    host.submit();
+    let pointer = host
+        .device
+        .map_memory(output.memory, 0, output.size, vk::MemoryMapFlags::empty())
+        .unwrap();
+    let result = std::slice::from_raw_parts(pointer as *const [f32; 8], queries.len()).to_vec();
+    host.device.unmap_memory(output.memory);
+    host.device.destroy_pipeline(pipeline, None);
+    host.device.destroy_pipeline_layout(pipeline_layout, None);
+    host.device.destroy_descriptor_pool(pool, None);
+    host.device.destroy_descriptor_set_layout(layout, None);
+    host.device.destroy_sampler(sampler, None);
+    result
+}
+
+#[test]
+#[ignore = "Explicit Vulkan compute actor-math acceptance; works with lavapipe"]
+fn actor_compute_world_distance_parallel_inside_alpha_and_inverse_transpose() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new_with_ray(false);
+        let mut inverse = [0.; 16];
+        inverse[0] = 0.5;
+        inverse[5] = 0.5;
+        inverse[10] = 0.5;
+        inverse[15] = 1.;
+        let opaque = actor_box_payload(inverse, false);
+        let queries = [
+            [-2., 1., 1., 0., 1., 0., 0., 10.],
+            [-2., 3., 1., 0., 1., 0., 0., 10.],
+            [1., 1., 1., 0., 1., 0., 0., 10.],
+            [-2., 1., 1., 0., 1., 0., 0., 1.99],
+        ];
+        let hits = actor_compute(&host, &opaque, &queries);
+        assert_eq!(
+            hits[0][3], 2.,
+            "world distance must survive non-unit inverse scale"
+        );
+        assert_eq!(hits[0][0], -1.);
+        assert_eq!(hits[1][3], -1., "parallel outside slab misses");
+        assert_eq!(hits[2][3], 1., "inside origin selects exit");
+        assert_eq!(hits[3][3], -1., "nearer terrain cutoff occludes actor");
+        assert!(
+            (hits[0][4] - 0.8f32.powf(2.2)).abs() < 1e-5,
+            "UV rows sample and linearize skin"
+        );
+        let transparent = actor_box_payload(inverse, true);
+        let hits = actor_compute(&host, &transparent, &queries);
+        assert_eq!(hits[0][3], 4., "transparent entry must expose opaque exit");
+        let mut invisible = opaque;
+        for face in 0..6 {
+            invisible[4 + 24 + face * 4 + 3] = 0.75;
+        }
+        assert_eq!(
+            actor_compute(&host, &invisible, &queries)[0][3],
+            -1.,
+            "transparent skin is not geometry"
+        );
+        let mut nearest = opaque;
+        nearest[0] = 2.;
+        nearest[76..148].copy_from_slice(&opaque[4..76]);
+        nearest[76 + 12] = 1.;
+        assert_eq!(
+            actor_compute(&host, &nearest, &[[-4., 1., 1., 0., 1., 0., 0., 10.]])[0][3],
+            2.,
+            "nearest actor wins independently of order"
+        );
+        inverse[4] = 1.;
+        inverse[5] = 1.;
+        inverse[10] = 1.;
+        let sheared = actor_box_payload(inverse, false);
+        let hit = actor_compute(&host, &sheared, &[[-4., 0.5, 0.5, 0., 1., 0., 0., 10.]])[0];
+        assert!((hit[3] - 3.).abs() < 1e-5);
+        assert!(
+            (hit[0] + 1. / 5f32.sqrt()).abs() < 1e-5 && (hit[1] + 2. / 5f32.sqrt()).abs() < 1e-5,
+            "inverse transpose transforms the face normal"
+        );
+    }
+}
+
+#[test]
+#[ignore = "Explicit RX 9070 XT actor/terrain closest-hit acceptance"]
+fn surface_gpu_actor_skin_alpha_and_nearer_block_occlusion() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let normal = Image::new(&host, 1, 1, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let skin = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let outputs = [
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false),
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false),
+        ];
+        host.begin();
+        let diagonal = std::f32::consts::FRAC_1_SQRT_2;
+        normal.initialize(host.command, [-diagonal, 0., -diagonal, 0.5]);
+        albedo.initialize(host.command, [0.1, 0.2, 0.3, 4.05]);
+        atlas.initialize(host.command, [0., 0., 1., 1.]);
+        skin.initialize(host.command, [1., 0., 0., 1.]);
+        for image in &outputs {
+            image.initialize(host.command, [0.; 4]);
+        }
+        ray.barrier(host.command);
+        host.submit();
+        let mut frame = identity_frame(1, 1);
+        frame[75] = 0.;
+        let views = [
+            atlas.view.as_raw(),
+            normal.view.as_raw(),
+            albedo.view.as_raw(),
+        ];
+        let target = triangle([[-3., -4., -4.], [-3., 4., -4.], [-3., 0., 4.]], 0.);
+        ray.scene(&target).unwrap();
+        let mut inverse = [0.; 16];
+        inverse[0] = 1.;
+        inverse[5] = 0.5;
+        inverse[10] = 1.;
+        inverse[15] = 1.;
+        inverse[12] = 2.;
+        inverse[13] = 0.5;
+        let actors = actor_box_payload(inverse, false);
+        let reflected = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&actors, skin.view.as_raw())),
+        );
+        assert!(
+            reflected[1][0][0] > 0.19 && reflected[1][0][2] < 0.001 && reflected[1][0][3] == 1.,
+            "skin actor before terrain must reflect red"
+        );
+        host.begin();
+        skin.clear(host.command, [1., 0., 0., 0.]);
+        ray.barrier(host.command);
+        host.submit();
+        let transparent = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&actors, skin.view.as_raw())),
+        );
+        assert!(
+            transparent[1][0][2] > 0.005 && transparent[1][0][0] < 0.001,
+            "transparent player must expose terrain"
+        );
+        host.begin();
+        skin.clear(host.command, [1., 0., 0., 1.]);
+        ray.barrier(host.command);
+        host.submit();
+        let blocker = triangle([[-0.5, -4., -4.], [-0.5, 4., -4.], [-0.5, 0., 4.]], 0.);
+        ray.scene(&blocker).unwrap();
+        let occluded = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&actors, skin.view.as_raw())),
+        );
+        assert!(
+            occluded[1][0][2] > 0.005 && occluded[1][0][0] < 0.001,
+            "nearer block must occlude player"
+        );
+        // Legacy dispatch must upload initialized zero actors, even after actor dispatch.
+        ray.scene(&target).unwrap();
+        let legacy = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!(
+            legacy[1][0][2] > 0.005 && legacy[1][0][0] < 0.001,
+            "legacy call must not retain stale actor payload"
+        );
+    }
+}
+
+#[test]
+#[ignore = "Explicit Vulkan compute extended actor index63 acceptance; works with lavapipe"]
+fn actor_compute_extended_index63_is_visible() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new_with_ray(false);
+        let mut inverse = [0.; 16];
+        inverse[0] = 0.5;
+        inverse[5] = 0.5;
+        inverse[10] = 0.5;
+        inverse[15] = 1.;
+        let legacy = actor_box_payload(inverse, false);
+        let mut data = [0.; EXTENDED_ACTOR_FLOATS];
+        data[0] = 64.;
+        for index in 0..64 {
+            let start = 4 + index * 72;
+            data[start..start + 72].copy_from_slice(&legacy[4..76]);
+            if index < 63 {
+                data[start + 13] = 100.;
+            }
+        }
+        let hit = actor_compute(&host, &data, &[[-2., 1., 1., 0., 1., 0., 0., 10.]])[0];
+        assert_eq!(
+            hit[3], 2.,
+            "actor63 must be intersected rather than silently dropped"
+        );
+        assert_eq!(hit[7], 1.);
+        // A legacy empty payload also remains a miss with the64-box shader.
+        let empty = actor_compute(
+            &host,
+            &[0.; ACTOR_FLOATS],
+            &[[-2., 1., 1., 0., 1., 0., 0., 10.]],
+        )[0];
+        assert_eq!(empty[3], -1.);
     }
 }

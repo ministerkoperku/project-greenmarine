@@ -85,8 +85,9 @@ void main() {
             vec3 transmission=exp(-vec3(.35,.09,.045)*thickness*marineParameter(2));
             absorbed=mix(absorbed,texture(MarineOpaqueColor,refracted).rgb,transmission);
         }
-        color.rgb=mix(absorbed,tone(sky),fresnel*marineParameter(4));
-        color.rgb+=pow(max(dot(reflected,SurfaceSun.xyz),0.0),96.0)*SurfaceSun.w*.12;
+        float skyVisibility=marineSkyVisibility(surfaceLight.y);
+        color.rgb=mix(absorbed,tone(sky*skyVisibility),fresnel*marineParameter(4));
+        color.rgb+=pow(max(dot(reflected,SurfaceSun.xyz),0.0),96.0)*SurfaceSun.w*.12*skyVisibility;
     }
     if(water && marineParameter(9)>.5) color.rgb=vec3(clamp(.5+surfaceWave/.16,0.0,1.0),0,0);
     color=mix(FogColor*vec4(1,1,1,color.a),color,chunkVisibility);

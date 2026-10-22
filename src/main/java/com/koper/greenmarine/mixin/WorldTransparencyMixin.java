@@ -23,6 +23,11 @@ public abstract class WorldTransparencyMixin {
     private void greenmarine$begin(CallbackInfo ci) {greenmarine$chunks=null;greenmarine$features=null;WorldPrograms.beginMain();}
     @Inject(method="lambda$addMainPass$0",at=@At("RETURN"))
     private void greenmarine$end(CallbackInfo ci) {WorldPrograms.endMain();}
+    @Inject(method="lambda$addMainPass$0",at=@At(value="INVOKE",target="Lcom/mojang/blaze3d/platform/Lighting;setupFor(Lcom/mojang/blaze3d/platform/Lighting$Entry;)V",shift=At.Shift.AFTER),require=1)
+    private void greenmarine$earlyMaterials(GpuBufferSlice fog,boolean oit,ChunkSectionsToRender chunks,FeatureRenderDispatcher.PreparedFrame features,boolean a,boolean b,CallbackInfo ci) {
+        WorldPrograms.captureEarlyMaterials(targets.main.get(),fog,chunks,chunkLayerSampler,
+            net.minecraft.client.Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.renderWireframeTerrain);
+    }
     @Redirect(method="lambda$addMainPass$0",at=@At(value="INVOKE",target="Lnet/minecraft/client/renderer/LevelRenderer;executeClassicTransparency(Lnet/minecraft/client/renderer/chunk/ChunkSectionsToRender;Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;Lcom/mojang/renderpearl/api/commands/RenderPass;)V"))
     private void greenmarine$defer(LevelRenderer renderer,ChunkSectionsToRender chunks,FeatureRenderDispatcher.PreparedFrame features,RenderPass pass) {
         if(WorldPrograms.enabled()){greenmarine$chunks=chunks;greenmarine$features=features;}

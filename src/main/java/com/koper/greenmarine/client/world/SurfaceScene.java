@@ -26,11 +26,15 @@ final class SurfaceScene implements AutoCloseable {
         } catch(RuntimeException|LinkageError error) {close();throw error;}
     }
     RenderPass begin(RenderTarget main,CommandEncoder encoder) {
-        encoder.copyTextureToTexture(main.getDepthTexture(),depth,0,0,0,0,0,main.width,main.height);
-        return encoder.createRenderPass(RenderPassDescriptor.builder(()->"GreenMarine terrain material replay")
+        return begin(main,encoder,false);
+    }
+    RenderPass begin(RenderTarget main,CommandEncoder encoder,boolean terrainOnly) {
+        if(!terrainOnly)encoder.copyTextureToTexture(main.getDepthTexture(),depth,0,0,0,0,0,main.width,main.height);
+        // Label avoids "terrain"/"opaque"/"main"/"solid": KoperLib Kender appends native geometry to passes matching those.
+        return encoder.createRenderPass(RenderPassDescriptor.builder(()->"GreenMarine surface material replay")
             .withColorAttachment(normalView,Optional.of(new Vector4f()))
             .withColorAttachment(albedoView,Optional.of(new Vector4f()))
-            .withDepthAttachment(depthView,OptionalDouble.empty()).build());
+            .withDepthAttachment(depthView,terrainOnly?OptionalDouble.of(0):OptionalDouble.empty()).build());
     }
     GpuTextureView normal() {return normalView;}
     GpuTextureView albedo() {return albedoView;}

@@ -1,4 +1,4 @@
-# Public rendering API (0.7 prototype)
+# Public rendering API (0.9 prototype)
 
 GreenMarine supplies a client-only rendering layer in
 `com.koper.greenmarine.api.render`. It uses Minecraft 26.3 Renderpearl on the
@@ -6,6 +6,19 @@ actual host device: Vulkan is primary and OpenGL shares the same executor.
 Fabric Loader is required; Fabric API, KoperLib and Fullpack are optional.
 The existing EFFECTS/LIGHTS/PACKS APIs and schema-v1 packs remain supported.
 This is an evolving prototype API, not Veil/Iris API or pack compatibility.
+
+## 0.9 additions
+
+Graph authors can explicitly declare `transientTexture` resources whose equal-spec,
+nonoverlapping lifetimes share owned storage. Existing `texture` declarations keep
+dedicated persistent storage. The immutable `allocationPlan()` exposes actual slot
+counts and logical lifetimes. See [allocation and ownership](GRAPH-ALLOCATION.md).
+
+Indexed/instanced contribution drawing reduces duplicated vertices and individual
+submission calls for consumers that adopt it. It does not automatically batch
+Minecraft's entities, add player geometry to RT, or implement compute. The new
+[settings UI](SETTINGS-UI.md) distinguishes requested ray policy, actual readiness,
+and stage CPU/GPU measurements. Profiling toggles preserve live rendering resources.
 
 ## Register a renderer
 
@@ -66,9 +79,11 @@ relative dimensions round up, with a minimum of one pixel.
 GPU buffer. `session.write(encoder, handle, offset, data)` validates owner,
 copy-destination usage and write bounds. `session.mesh(label, vertexFormat,
 vertexCount, data)` requires exactly the declared non-indexed triangle vertices
-and matching byte stride. Draws use vertex binding zero; indexed, instanced and
-compute helpers are not implemented in this release. Advanced callers can use
-the host objects under the same ownership rules.
+and matching byte stride. Draws use vertex binding zero. Indexed triangles and
+instanced draws are available through `indexedMesh` and the extended pass draw
+overload; see [indexed/instanced meshes](INDEXED-MESHES.md). Multiple vertex
+bindings and general compute dispatch remain outside this API. Advanced callers
+can use host objects under the same ownership rules.
 
 Texture, buffer and program handles implement idempotent `close`. The session
 closes every remaining owned object. Cross-session binding and use after close

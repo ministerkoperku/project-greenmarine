@@ -30,15 +30,17 @@ public final class WorldPrograms {
     private static final Set<CompiledRenderPipeline> OWNED=Collections.newSetFromMap(new IdentityHashMap<>());
     private static final OpaqueScene OPAQUE=new OpaqueScene();
     private static final SurfaceScene MATERIALS=new SurfaceScene();
+    private static final BackgroundSky BACKGROUND=new BackgroundSky();
     private static final Map<String,CompiledRenderPipeline> CAPTURE_VARIANTS=new HashMap<>();
     private static final WeatherMemory WEATHER=new WeatherMemory();
     private static final ByteBuffer ENVIRONMENT=ByteBuffer.allocateDirect(128).order(ByteOrder.nativeOrder());
     private static final ByteBuffer FRAME=ByteBuffer.allocateDirect(MarineFrame.BYTES).order(ByteOrder.nativeOrder());
     private static final ByteBuffer SURFACE=ByteBuffer.allocateDirect(SURFACE_BYTES).order(ByteOrder.nativeOrder());
-    private static GpuBuffer frame,surface,surfaceOpaque,environment,ray,voxel,surfaceRay;
+    private static GpuBuffer frame,surface,surfaceOpaque,environment,ray,voxel,surfaceRay,materialProfiles,materialExtension;
     private static com.mojang.renderpearl.api.textures.GpuTextureView voxelMaterials;
     private static boolean prepared,failed,pendingDraw,logged,captureMode,captureWater,surfaceReady,captureUnsupported;
-    private static long draws,captures;
+    private static boolean earlyMaterials;
+    private static long draws,captures,bindingEpoch,bindingUpdates,bindingSkips;
     private static GpuTimer mainGpu;
     private static int mainMeasurement=-1;
     private static long mainFrames;
@@ -47,6 +49,8 @@ public final class WorldPrograms {
     public static boolean enabled() {return !failed && prepared && GreenMarineClient.enabled() && ShaderRuntime.active()!=null
         && !ShaderRuntime.active().definition().programs().isEmpty() && ShaderRuntime.script()!=null && !ShaderRuntime.script().failed();}
     public static long draws() {return draws;}
+    public static long bindingUpdates() {return bindingUpdates;}
+    public static long bindingSkips() {return bindingSkips;}
     public static long captures() {return captures;}
     public static int variants() {return VARIANTS.size();}
     public static PerformanceSamples.Snapshot copyCpu() {return COPY_CPU.snapshot();}
@@ -62,6 +66,7 @@ public final class WorldPrograms {
     }
     public static void endMain() {if(mainGpu!=null)mainGpu.end(RenderSystem.getDevice().createCommandEncoder(),mainMeasurement);}
     public static void prepare(GameRenderer renderer,Matrix4fc projection) {
+        bindingEpoch++;earlyMaterials=false;
         prepared=false;surfaceReady=false;captureUnsupported=surfaceProgram()!=null && renderer.gameRenderState().levelRenderState.renderWireframeTerrain;RayWorld.beginSurfaceFrame();
         if(renderer.gameRenderState().shouldRenderLevel) {writeEnvironment(renderer);writeSurface(renderer,projection);}
         if(failed || !GreenMarineClient.enabled() || ShaderRuntime.active()==null || ShaderRuntime.active().definition().programs().isEmpty()
@@ -76,6 +81,24 @@ public final class WorldPrograms {
             if(surfaceProgram()!=null) MATERIALS.prepare(main,encoder);
             if(surfaceOpaque==null)surfaceOpaque=RenderSystem.getDevice().createBuffer(()->"GreenMarine opaque surface frame",GpuBuffer.USAGE_UNIFORM|GpuBuffer.USAGE_COPY_DST,SURFACE_BYTES);
             environmentBindings(encoder);surfaceRay=RayWorld.surfaceBindings(encoder);
+            if(materialProfiles==null || materialExtension==null) {
+                var atlas=client.getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS);
+                var missing=atlas.getSprite(Identifier.parse("minecraft:missingno"));
+                java.util.function.Function<String,float[]> rectangles=id -> {
+                    var sprite=atlas.getSprite(Identifier.parse(id));
+                    return sprite==missing?null:new float[]{sprite.getU0(),sprite.getV0(),sprite.getU1(),sprite.getV1()};
+                };
+                if(materialProfiles==null) {
+                    var profiles=ByteBuffer.allocateDirect(com.koper.greenmarine.api.render.BlockMaterials.FRAME_BYTES).order(ByteOrder.nativeOrder());
+                    com.koper.greenmarine.api.render.BlockMaterials.writeAtlas(profiles,rectangles);
+                    materialProfiles=RenderSystem.getDevice().createBuffer(()->"GreenMarine block materials",GpuBuffer.USAGE_UNIFORM,profiles);
+                }
+                if(materialExtension==null) {
+                    var profiles=ByteBuffer.allocateDirect(com.koper.greenmarine.api.render.BlockMaterials.EXTENSION_FRAME_BYTES).order(ByteOrder.nativeOrder());
+                    com.koper.greenmarine.api.render.BlockMaterials.writeAtlasExtension(profiles,rectangles);
+                    materialExtension=RenderSystem.getDevice().createBuffer(()->"GreenMarine block material extension",GpuBuffer.USAGE_UNIFORM,profiles);
+                }
+            }
             MarineFrame.write(FRAME,main.width,main.height,GreenMarineClient.seconds(client.getDeltaTracker().getGameTimeDeltaPartialTick(false)),
                 client.level==null?0:java.lang.Math.floorMod(client.level.getDefaultClockTime(),24000)/24000f,RenderSystem.getDevice().getDeviceInfo().isZZeroToOne(),
                 ShaderRuntime.settings().quality(),ShaderRuntime.rays().effective(),projection,camera.viewRotationMatrix,ShaderRuntime.script());
@@ -133,10 +156,19 @@ public final class WorldPrograms {
         if(name.equals("core/particle"))return PackProgram.Target.PARTICLES;
         return null;
     }
+    public static void bind(RenderPass pass,CompiledRenderPipeline pipeline,WorldBindingCache cache) {
+        if(!enabled() || !OWNED.contains(pipeline)) {cache.invalidate();return;}
+        int flags=(captureMode?1:0)|(captureWater?2:0)|(surfaceReady?4:0);
+        if(cache.matches(pipeline,bindingEpoch,flags)) {bindingSkips++;return;}
+        bind(pass,pipeline);
+        cache.commit(pipeline,bindingEpoch,flags);
+    }
     public static void bind(RenderPass pass,CompiledRenderPipeline pipeline) {
         if(!enabled() || !OWNED.contains(pipeline))return;
+        bindingUpdates++;
         pass.setUniform("MarineFrame",frame);pass.setUniform("MarineSurfaceFrame",captureMode && !captureWater?surfaceOpaque:surface);
         pass.setUniform("MarineEnvironment",environment);pass.setUniform("RaySurfaceFrame",surfaceRay);pass.setUniform("RayFrame",ray);pass.setUniform("VoxelFrame",voxel);
+        pass.setUniform("MarineMaterialFrame",materialProfiles);pass.setUniform("MarineMaterialExtension",materialExtension);
         var linear=RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);var nearest=RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
         pass.setUniform("MarineOpaqueColor",OPAQUE.color(),linear);pass.setUniform("MarineOpaqueDepth",OPAQUE.depth(),nearest);
         pass.setUniform("RayLighting",RayWorld.lighting(),linear);pass.setUniform("RayNormalDepth",RayWorld.normals(),nearest);pass.setUniform("RayAlbedo",RayWorld.albedo(),linear);pass.setUniform("VoxelMaterials",voxelMaterials,nearest);
@@ -151,7 +183,13 @@ public final class WorldPrograms {
     }
     public static void captureOpaque(RenderTarget main) {
         if(!enabled())return;long started=System.nanoTime();
-        try {var encoder=RenderSystem.getDevice().createCommandEncoder();OPAQUE.capture(main,encoder);
+        try {var encoder=RenderSystem.getDevice().createCommandEncoder();
+            var pack=ShaderRuntime.active();
+            var background=pack.definition().programs().stream().filter(program->program.target()==PackProgram.Target.BACKGROUND).findFirst();
+            if(background.isPresent()) {
+                BACKGROUND.render(main,encoder,pack,background.get(),frame,surface,environment);draws++;pendingDraw=true;
+            }
+            OPAQUE.capture(main,encoder);
             SURFACE.putFloat(0,1);SURFACE.position(0).limit(SURFACE_BYTES);encoder.writeToBuffer(surface.slice(),SURFACE);captures++;COPY_CPU.add((System.nanoTime()-started)/1e6);
         } catch(RuntimeException|LinkageError error) {fail(error);}
     }
@@ -163,21 +201,40 @@ public final class WorldPrograms {
     public static GpuTextureView surfaceNormalDepth() {return surfaceReady?MATERIALS.normal():null;}
     public static GpuTextureView surfaceAlbedo() {return surfaceReady?MATERIALS.albedo():null;}
     public static void captureMaterials(RenderTarget main,GpuBufferSlice fog,ChunkSectionsToRender chunks,GpuSampler sampler,boolean wireframe) {
+        if(earlyMaterials)return;
+        captureMaterials(main,fog,chunks,sampler,wireframe,false);
+    }
+    public static void captureEarlyMaterials(RenderTarget main,GpuBufferSlice fog,ChunkSectionsToRender chunks,GpuSampler sampler,boolean wireframe) {
+        var program=surfaceProgram();if(program==null || !program.surfaceBeforeTerrain())return;
+        captureMaterials(main,fog,chunks,sampler,wireframe,true);
+        earlyMaterials=surfaceReady;
+    }
+    private static void captureMaterials(RenderTarget main,GpuBufferSlice fog,ChunkSectionsToRender chunks,GpuSampler sampler,boolean wireframe,boolean terrainOnly) {
         if(!enabled() || surfaceProgram()==null || wireframe)return;
         var encoder=RenderSystem.getDevice().createCommandEncoder();
         try {
             captureMode=true;captureWater=false;
+            if(terrainOnly) {
+                SURFACE.putFloat(0,1);SURFACE.position(0).limit(SURFACE_BYTES);
+                encoder.writeToBuffer(surface.slice(),SURFACE);
+            }
             var atlas=Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS).getTextureView();
-            try(var pass=MATERIALS.begin(main,encoder)) {
+            try(var pass=MATERIALS.begin(main,encoder,terrainOnly)) {
                 RenderSystem.bindDefaultUniforms(pass);pass.setUniform("Fog",fog);
                 chunks.renderGroup(ChunkSectionLayerGroup.OPAQUE,pass,sampler,atlas,wireframe);
                 captureWater=true;chunks.renderGroup(ChunkSectionLayerGroup.TRANSLUCENT,pass,sampler,atlas,wireframe);
             }
             captureMode=false;surfaceReady=true;
             RayWorld.renderSurface(MATERIALS.normal(),MATERIALS.albedo(),main.width,main.height);
-            surfaceRay=RayWorld.surfaceBindings(encoder);environmentBindings(encoder);
+            surfaceRay=RayWorld.surfaceBindings(encoder);environmentBindings(encoder);bindingEpoch++;
         } catch(RuntimeException|LinkageError error) {surfaceReady=false;fail(error);}
-        finally {captureMode=captureWater=false;}
+        finally {
+            captureMode=captureWater=false;
+            if(terrainOnly && surface!=null) {
+                SURFACE.putFloat(0,0);SURFACE.position(0).limit(SURFACE_BYTES);
+                encoder.writeToBuffer(surface.slice(),SURFACE);
+            }
+        }
     }
     public static GpuBuffer surfaceBindings(CommandEncoder encoder) {
         if(surface==null)surface=RenderSystem.getDevice().createBuffer(()->"GreenMarine MarineSurfaceFrame",GpuBuffer.USAGE_UNIFORM|GpuBuffer.USAGE_COPY_DST,SURFACE_BYTES);
@@ -229,7 +286,9 @@ public final class WorldPrograms {
     }
     private static void fail(Throwable error) {failed=true;prepared=false;pendingDraw=false;ShaderRuntime.renderFailure(error);GreenMarine.LOGGER.error("World shader programs disabled until pack switch/reload",error);}
     public static void reset() {
+        bindingEpoch++;bindingUpdates=bindingSkips=0;
+        BACKGROUND.close();
         prepared=failed=pendingDraw=logged=captureMode=captureWater=surfaceReady=captureUnsupported=false;WEATHER.reset();if(mainGpu!=null)mainGpu.close();mainGpu=null;mainFrames=0;mainMeasurement=-1;VARIANTS.values().forEach(CompiledRenderPipeline::close);VARIANTS.clear();CAPTURE_VARIANTS.values().forEach(CompiledRenderPipeline::close);CAPTURE_VARIANTS.clear();OWNED.clear();OPAQUE.close();MATERIALS.close();
-        if(frame!=null)frame.close();if(surface!=null)surface.close();if(surfaceOpaque!=null)surfaceOpaque.close();if(environment!=null)environment.close();frame=surface=surfaceOpaque=environment=ray=voxel=surfaceRay=null;voxelMaterials=null;draws=captures=0;COPY_CPU.clear();
+        if(frame!=null)frame.close();if(surface!=null)surface.close();if(surfaceOpaque!=null)surfaceOpaque.close();if(environment!=null)environment.close();if(materialProfiles!=null)materialProfiles.close();if(materialExtension!=null)materialExtension.close();materialProfiles=materialExtension=null;frame=surface=surfaceOpaque=environment=ray=voxel=surfaceRay=null;voxelMaterials=null;draws=captures=0;COPY_CPU.clear();
     }
 }

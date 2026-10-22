@@ -5,6 +5,26 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class WorldProgramTest {
+    @Test void earlySurfaceTimingWorksForRenamedSolsticeAndExplicitCustomPrograms() {
+        String custom=JSON.replace("\"worldRays\":true","\"worldRays\":true,\"surface\":\"test:surface\",\"surfaceBeforeTerrain\":true");
+        assertTrue(ShaderPack.parse(com.google.gson.JsonParser.parseString(custom).getAsJsonObject()).programs().getFirst().surfaceBeforeTerrain());
+        var legacy=new PackProgram(PackProgram.Target.TERRAIN,null,"test:terrain",true,"test:surface",true,false);
+        assertFalse(legacy.surfaceBeforeTerrain());
+        String reused=JSON.replace("\"fragment\":\"test:terrain\"","\"fragment\":\"greenmarine:core/solstice_terrain\"")
+            .replace("\"worldRays\":true","\"worldRays\":true,\"surface\":\"greenmarine:core/solstice_surface\"");
+        var renamed=ShaderPack.parse(com.google.gson.JsonParser.parseString(reused).getAsJsonObject());
+        assertEquals("test:world",renamed.id());assertTrue(renamed.programs().getFirst().surfaceBeforeTerrain());
+        assertThrows(IllegalArgumentException.class,()->ShaderPack.parse(com.google.gson.JsonParser.parseString(JSON.replace("\"worldRays\":true","\"worldRays\":true,\"surfaceBeforeTerrain\":true")).getAsJsonObject()));
+    }
+    @Test void voxelShadowOptInAllowsFallbackAndKeepsLegacyProgramsUnchanged() {
+        var caps=new RenderCapabilities("Vulkan",false,false,true,true);
+        var legacy=ShaderPack.parse(com.google.gson.JsonParser.parseString(JSON).getAsJsonObject());
+        assertEquals(RayMode.OFF,RenderPolicy.rays(RayMode.HARDWARE,Quality.HIGH,caps,legacy).effective());
+        var opted=ShaderPack.parse(com.google.gson.JsonParser.parseString(JSON.replace("\"worldRays\":true", "\"worldRays\":true,\"voxelShadows\":true")).getAsJsonObject());
+        assertTrue(opted.programs().getFirst().voxelShadows());
+        assertEquals(RayMode.VOXEL,RenderPolicy.rays(RayMode.HARDWARE,Quality.HIGH,caps,opted).effective());
+        assertEquals(RayMode.OFF,RenderPolicy.rays(RayMode.OFF,Quality.HIGH,caps,opted).effective());
+    }
     @Test void snapshotsOptInSurfaceAndRejectsIncompleteReload() {
         String json=JSON.replace("\"worldRays\":true","\"worldRays\":true,\"surface\":\"test:surface\"");
         var resources=new HashMap<>(Map.of("test:shaders/terrain.vsh","vertex","test:shaders/terrain.fsh","fragment",

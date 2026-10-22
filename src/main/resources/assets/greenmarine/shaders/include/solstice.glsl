@@ -2,6 +2,9 @@
 #define GREENMARINE_SOLSTICE
 #include <greenmarine:surface.glsl>
 #include <greenmarine:environment.glsl>
+#include <greenmarine:reflection_policy.glsl>
+#include <greenmarine:cloud_noise.glsl>
+#include <greenmarine:output_quality.glsl>
 #define SOL_EXPOSURE 0
 #define SOL_SATURATION 1
 #define SOL_WAVES 2
@@ -31,6 +34,17 @@
 #define SOL_ROUGHNESS 26
 #define SOL_SNOW 27
 float solLuma(vec3 c) { return dot(c,vec3(.2126,.7152,.0722)); }
+vec3 solMaterialFresnel(vec3 albedo,float surfaceClass,float cosine) {
+    return vec3(marineFresnel(marineMaterialF0(albedo.r,surfaceClass),cosine),
+        marineFresnel(marineMaterialF0(albedo.g,surfaceClass),cosine),
+        marineFresnel(marineMaterialF0(albedo.b,surfaceClass),cosine));
+}
+vec3 solSpecularWeight(vec3 fresnel,float roughness,float surfaceClass) {
+    float strength=marineParameter(SOL_REFLECTION);
+    return vec3(marineSpecularWeight(fresnel.r,roughness,surfaceClass,strength),
+        marineSpecularWeight(fresnel.g,roughness,surfaceClass,strength),
+        marineSpecularWeight(fresnel.b,roughness,surfaceClass,strength));
+}
 vec3 solLinear(vec3 c) { return pow(max(c,vec3(0)),vec3(2.2)); }
 vec3 solDisplay(vec3 c) { return pow(max(c,vec3(0)),vec3(1.0/2.2)); }
 float solHash(vec2 p) { return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123); }
@@ -38,12 +52,25 @@ float solNoise(vec2 p) {
     vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);
     return mix(mix(solHash(i),solHash(i+vec2(1,0)),f.x),mix(solHash(i+vec2(0,1)),solHash(i+vec2(1)),f.x),f.y);
 }
-float solFractal(vec2 p) {
-    float n=solNoise(p)*.55;
-    n+=solNoise(p*2.03+vec2(17,9))*.28;
-    if(Context.y>1.5) n+=solNoise(p*4.11+vec2(32,19))*.12;
-    if(Context.y>2.5) n+=solNoise(p*8.21+vec2(4,71))*.05;
-    return n;
+// Octave periods are integer harmonics of the floating-origin period.
+float solCloudLayer(vec2 p,int period,float footprint) {
+    float detail=clamp(marineParameter(SOL_CLOUD_DETAIL),.1,2.0);
+    float result=0.0,total=0.0;
+    int frequency=1;
+    for(int octave=0;octave<4;octave++) {
+        if(octave==2 && Context.y<1.5) break;
+        if(octave==3 && Context.y<2.5) break;
+        float weight=octave==0?.55:(octave==1?.28:(octave==2?.12:.05))*detail;
+        float detailWeight=marineCloudDetailWeight(footprint*float(frequency));
+        float noise=.5;
+        if(detailWeight>0.0) noise=marineCloudNoise(p.x*float(frequency),p.y*float(frequency),period*frequency);
+        result+=mix(.5,noise,detailWeight)*weight;
+        total+=weight;frequency*=2;
+    }
+    return result/max(total,.001);
+}
+vec3 solOutputDither(vec3 color,vec2 pixel) {
+    return clamp(color+vec3(marineOutputDither(int(pixel.x),int(pixel.y))),0.0,1.0);
 }
 float solDay() { return smoothstep(-.12,.15,SurfaceSun.y); }
 vec3 solSunColor() { return mix(vec3(1.0,.56,.28),vec3(1.0,.91,.73),smoothstep(.02,.5,SurfaceSun.y)); }
@@ -53,14 +80,17 @@ vec3 solAmbient(vec3 n) {
     ambient*=mix(.65,1.0,smoothstep(-.5,.7,n.y));
     return ambient*marineParameter(SOL_AMBIENT)*(1.0-Environment.y*.28);
 }
-vec3 solIrradiance(vec3 n,float skylight,float blocklight) {
+vec3 solIrradiance(vec3 n,float skylight,float blocklight,float sunVisibility) {
     vec3 ambient=solAmbient(n);
-    float sunlight=max(dot(n,SurfaceSun.xyz),0.0)*SurfaceSun.w;
+    float sunlight=max(dot(n,SurfaceSun.xyz),0.0)*SurfaceSun.w*sunVisibility;
     float moonlight=max(dot(n,Moon.xyz),0.0)*Moon.w*.06*marineParameter(SOL_NIGHT);
     return (ambient+solSunColor()*sunlight+vec3(.38,.53,.86)*moonlight)*skylight
         +vec3(1.25,.74,.32)*pow(blocklight,3.0)+vec3(.035)*blocklight;
 }
+vec3 solIrradiance(vec3 n,float skylight,float blocklight) {return solIrradiance(n,skylight,blocklight,1.0);}
 float solPuddle(vec3 p,vec3 n,float skylight) {
+    if(Environment.z<=0.0 || marineParameter(SOL_WETNESS)<=0.0 || marineParameter(SOL_PUDDLES)<=0.0
+        || n.y<=.72 || skylight<=.65) return 0.0;
     float puddleNoise=solNoise((p.xz+SurfaceOrigin.xz)*.38);
     return smoothstep(.54,.76,puddleNoise)*smoothstep(.72,.99,n.y)*smoothstep(.65,.98,skylight)
         *Environment.z*marineParameter(SOL_WETNESS)*marineParameter(SOL_PUDDLES);
@@ -84,11 +114,16 @@ vec3 solSky(vec3 direction,bool clouds) {
     if(clouds && d.y>.015 && Dimension.w>.5) {
         float altitude=Environment.x;
         vec2 wind=vec2(EnvironmentTime.x*.018,EnvironmentTime.x*.007)*marineParameter(SOL_WIND);
-        vec2 layer=(SurfaceOrigin.xz+d.xz*max(60.0,240.0-altitude)/max(d.y,.04))*.0035+wind;
+        float elevation=sqrt(d.y*d.y+.04*.04);
+        float lowHeight=max(60.0,240.0-altitude),highHeight=max(100.0,390.0-altitude);
+        float angularPixel=max(abs(InverseProjection[0][0])/max(Frame.x,1.0),abs(InverseProjection[1][1])/max(Frame.y,1.0))*2.0;
+        vec2 layer=(SurfaceOrigin.xz+d.xz*lowHeight/elevation)*(16.0/4096.0)+wind;
         float cover=marineParameter(SOL_CLOUDS)+Environment.y*.18;
-        float low=smoothstep(.67-cover*.36,.83-cover*.36,solFractal(layer*marineParameter(SOL_CLOUD_DETAIL)));
-        vec2 upper=(SurfaceOrigin.xz+d.xz*max(100.0,390.0-altitude)/max(d.y,.04))*.0021-wind*.36;
-        float high=smoothstep(.58,.8,solFractal(upper+vec2(91,37)))*.35;
+        float footprint=lowHeight*angularPixel*(16.0/4096.0)/(elevation*elevation);
+        float low=smoothstep(.67-cover*.36,.83-cover*.36,solCloudLayer(layer,16,footprint));
+        vec2 upper=(SurfaceOrigin.xz+d.xz*highHeight/elevation)*(8.0/4096.0)-wind*.36;
+        float highFootprint=highHeight*angularPixel*(8.0/4096.0)/(elevation*elevation);
+        float high=smoothstep(.58,.8,solCloudLayer(upper+vec2(91,37),8,highFootprint))*.35;
         float opacity=clamp(low+high,0.0,.96)*smoothstep(.015,.09,d.y);
         vec3 cloud=mix(vec3(.034,.045,.075),vec3(.86,.87,.86),day);
         cloud*=1.0-Environment.y*.58;

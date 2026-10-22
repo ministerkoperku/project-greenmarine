@@ -30,12 +30,14 @@ if (runtimeProbe) {
     sourceSets {
         probe {
             java.setSrcDirs(['src/probe/java'])
-            resources.setSrcDirs(['src/probe/resources'])
+            resources.setSrcDirs(['src/probe/resources', 'src/samples/resources'])
             compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
             runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
         }
     }
 }
+// Legacy fullscreen demo packs stay API fixtures for tests/probes, not release content.
+sourceSets.test.resources.srcDir 'src/samples/resources'
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
@@ -99,12 +101,23 @@ processResources {
 tasks.register('compileRayShader', Exec) {
     commandLine 'glslangValidator', '-V', '--target-env', 'vulkan1.2', 'engine/shaders/world_rt.comp', '-o', 'engine/shaders/world_rt.spv'
     inputs.file 'engine/shaders/world_rt.comp'
+    inputs.file 'engine/shaders/sun_transmission.glsl'
+    inputs.file 'engine/shaders/diffuse_samples.glsl'
     outputs.file 'engine/shaders/world_rt.spv'
 }
 tasks.register('compileSurfaceRayShader', Exec) {
     commandLine 'glslangValidator', '-V', '--target-env', 'vulkan1.2', 'engine/shaders/surface_rt.comp', '-o', 'engine/shaders/surface_rt.spv'
     inputs.file 'engine/shaders/surface_rt.comp'
+    inputs.file 'engine/shaders/sun_transmission.glsl'
+    inputs.file 'engine/shaders/diffuse_samples.glsl'
+    inputs.file 'engine/shaders/surface_actors.glsl'
     outputs.file 'engine/shaders/surface_rt.spv'
+}
+tasks.register('compileActorTestShader', Exec) {
+    commandLine 'glslangValidator', '-V', '--target-env', 'vulkan1.2', 'engine/shaders/surface_actors_test.comp', '-o', 'engine/shaders/surface_actors_test.spv'
+    inputs.file 'engine/shaders/surface_actors_test.comp'
+    inputs.file 'engine/shaders/surface_actors.glsl'
+    outputs.file 'engine/shaders/surface_actors_test.spv'
 }
 tasks.register('solsticeShaderpack', Zip) {
     archiveFileName = "solstice-rt-${project.version}.zip"
@@ -115,7 +128,7 @@ tasks.register('solsticeShaderpack', Zip) {
         into 'assets/greenmarine/shaders/core'
     }
     from('src/main/resources/assets/greenmarine/shaders/include') {
-        include 'solstice*.glsl', 'environment.glsl', 'surface_rays.glsl', 'history.glsl', 'frame.glsl', 'surface.glsl', 'rays.glsl'
+        include 'solstice*.glsl', 'environment.glsl', 'surface_rays.glsl', 'history.glsl', 'frame.glsl', 'surface.glsl', 'rays.glsl', 'sky_visibility.glsl', 'materials.glsl', 'voxel.glsl', 'reflection_policy.glsl', 'cloud_noise.glsl', 'output_quality.glsl'
         into 'assets/greenmarine/shaders/include'
     }
 }
@@ -123,7 +136,7 @@ tasks.register('exampleShaderpack', Zip) {
     archiveFileName = "aurora-rt-example-${project.version}.zip"
     destinationDirectory = layout.buildDirectory.dir('shaderpacks')
     from('examples/aurora-rt')
-    from('src/main/resources/assets/greenmarine/shaders/core') {
+    from('src/samples/resources/assets/greenmarine/shaders/core') {
         include 'aurora_rt.fsh', 'aurora_fallback.fsh'
         into 'assets/aurora/shaders/core'
     }
@@ -137,7 +150,7 @@ tasks.register('seabreezeShaderpack', Zip) {
         into 'assets/greenmarine/shaders/core'
     }
     from('src/main/resources/assets/greenmarine/shaders/include') {
-        include 'frame.glsl', 'surface.glsl', 'rays.glsl'
+        include 'frame.glsl', 'surface.glsl', 'rays.glsl', 'sky_visibility.glsl'
         into 'assets/greenmarine/shaders/include'
     }
 }
@@ -147,7 +160,28 @@ tasks.register('prismarineCorrectedShaderpack', Zip) {
     from('examples/prismarine-fixed')
 }
 tasks.named('build') { dependsOn 'exampleShaderpack', 'seabreezeShaderpack', 'prismarineCorrectedShaderpack', 'solsticeShaderpack' }
+tasks.register('rasterShaderpack', Zip) {
+    inputs.property 'exportedPackId', 'greenmarine:raster_example'
+    archiveFileName = "marine-raster-${project.version}.zip"
+    destinationDirectory = layout.buildDirectory.dir('shaderpacks')
+    from('src/main/resources') {
+        include 'assets/greenmarine/greenmarine/packs/raster.json'
+        include 'assets/greenmarine/shaders/core/raster_terrain.fsh'
+        include 'assets/greenmarine/shaders/core/seabreeze_terrain.vsh'
+        include 'assets/greenmarine/shaders/core/seabreeze_sky.fsh'
+        include 'assets/greenmarine/shaders/core/seabreeze_clouds.fsh'
+        include 'assets/greenmarine/shaders/include/frame.glsl'
+        include 'assets/greenmarine/shaders/include/surface.glsl'
+        include 'assets/greenmarine/shaders/include/sky_visibility.glsl'
+        filesMatching('assets/greenmarine/greenmarine/packs/raster.json') {
+            filter { line -> line.replace('"greenmarine:raster"', '"greenmarine:raster_example"')
+                .replace('"Marine Raster"', '"Marine Raster Example"') }
+        }
+    }
+}
+tasks.named('build') { dependsOn 'rasterShaderpack' }
 tasks.register('buildNative', Exec) {
+    mustRunAfter 'compileActorTestShader'
     dependsOn 'compileRayShader', 'compileSurfaceRayShader'
     workingDir 'engine'
     commandLine 'cargo', 'build', '--release', '--locked', '--target', nativeTarget
@@ -163,6 +197,7 @@ tasks.register('buildNative', Exec) {
     outputs.file nativeLibrary
 }
 tasks.register('buildAndroidNative', Exec) {
+    mustRunAfter 'compileActorTestShader'
     dependsOn 'compileRayShader', 'compileSurfaceRayShader'
     workingDir 'engine'
     commandLine 'cargo', 'build', '--release', '--locked', '--target', 'aarch64-linux-android'

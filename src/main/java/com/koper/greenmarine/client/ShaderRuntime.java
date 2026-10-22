@@ -77,10 +77,10 @@ public final class ShaderRuntime {
     public static void apply(ShaderSettings next) {
         try {
             next.save(settingsPath());
-            boolean rebuild=!next.pack().equals(settings.pack()) || next.quality()!=settings.quality()
-                || next.rays()!=settings.rays() || next.profiling()!=settings.profiling();
+            boolean rebuild=next.requiresRendererRebuild(settings);
+            boolean parametersChanged=!next.parameters().equals(settings.parameters());
             settings = next;
-            if(rebuild) reset(); else updateOverrides();
+            if(rebuild) reset(); else if(parametersChanged) updateOverrides();
         }
         catch (java.io.IOException error) { GreenMarine.LOGGER.error("Unable to save shader settings", error); }
     }

@@ -50,7 +50,7 @@ public final class VoxelWorld {
             else { chunk=client.level.getChunkSource().getChunk(x>>4,z>>4,ChunkStatus.FULL,false); CHUNKS.put(key,chunk); }
             if(chunk==null) return 0;
             var state=chunk.getBlockState(POSITION.set(x,y,z));
-            boolean solid=state.isSolidRender(); int emission=state.getLightEmission();
+            boolean solid=state.isSolidRender() || state.getBlock() instanceof net.minecraft.world.level.block.TintedGlassBlock; int emission=state.getLightEmission();
             int color=solid || emission>0?state.getMapColor(client.level,POSITION).col:0;
             if(color==0 && emission>0) color=0xFFCC66;
             return VoxelGrid.sample(solid,color,emission);

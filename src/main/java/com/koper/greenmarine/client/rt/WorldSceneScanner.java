@@ -26,6 +26,7 @@ public final class WorldSceneScanner {
     private final List<BlockStateModelPart> parts=new ArrayList<>();
     private final RandomSource random=RandomSource.create(0);
     private final float[] vertices=new float[9],uv=new float[6];
+    private final Map<net.minecraft.world.level.block.Block,Float> transmission=new IdentityHashMap<>();
     private SectionSceneCache.Ticket ticket;
     private TriangleScene.Builder staging;
     private Object world;
@@ -58,7 +59,7 @@ public final class WorldSceneScanner {
     public void unloadColumn(int x,int z) {cache.unloadColumn(x,z);observed.remove(new SectionSceneCache.ColumnKey(x,z));trackPending();}
     public void invalidateAll() {cache.invalidateAll();trackPending();}
     public void reset() {
-        cache.reset();observed.clear();ticket=null;staging=null;world=null;cursor=0;
+        cache.reset();observed.clear();transmission.clear();ticket=null;staging=null;world=null;cursor=0;
         scannedBlocks=scanNanos=pendingSince=0;
     }
     private void observeLoadedColumns(Minecraft client) {
@@ -124,6 +125,8 @@ public final class WorldSceneScanner {
         } finally {scanNanos+=System.nanoTime()-started;}
     }
     private void add(Minecraft client,net.minecraft.world.level.block.state.BlockState state,List<BakedQuad> quads,float x,float y,float z,int emission) {
+        float sunlight=transmission.computeIfAbsent(state.getBlock(),block -> com.koper.greenmarine.api.render.BlockMaterials
+            .forBlock(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block).toString()).sunlightTransmission());
         for(var quad:quads) {
             if(!quad.materialInfo().sprite().atlasLocation().equals(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS))continue;
             int tint=0xFFFFFF;
@@ -138,7 +141,7 @@ public final class WorldSceneScanner {
                     long packed=quad.packedUV(index);uv[corner*2]=UVPair.unpackU(packed);uv[corner*2+1]=UVPair.unpackV(packed);
                 }
                 staging.triangle(vertices,uv,tint,Math.max(emission,quad.materialInfo().lightEmission()),
-                    quad.materialInfo().layer()!=net.minecraft.client.renderer.chunk.ChunkSectionLayer.SOLID);
+                    quad.materialInfo().layer()!=net.minecraft.client.renderer.chunk.ChunkSectionLayer.SOLID,sunlight);
             }
         }
     }

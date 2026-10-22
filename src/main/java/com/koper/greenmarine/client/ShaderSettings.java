@@ -29,6 +29,10 @@ public record ShaderSettings(String pack, Quality quality, RayMode rays, boolean
         });
         parameters=Map.copyOf(copy);
     }
+    /** Diagnostics and value-only edits do not retire live programs, scripts or ray scenes. */
+    public boolean requiresRendererRebuild(ShaderSettings previous) {
+        return !pack.equals(previous.pack()) || quality!=previous.quality() || rays!=previous.rays();
+    }
     public Map<String,Float> overridesFor(ShaderPack definition) {
         var stored=parameters.getOrDefault(definition.id(),Map.of()); var result=new LinkedHashMap<String,Float>();
         for(var parameter:definition.parameters()) if(stored.containsKey(parameter.name())) {
@@ -51,7 +55,8 @@ public record ShaderSettings(String pack, Quality quality, RayMode rays, boolean
     public ShaderSettings withoutParameters(String id) {
         var packs=new LinkedHashMap<>(parameters); packs.remove(id); return new ShaderSettings(pack,quality,rays,profiling,packs);
     }
-    public static ShaderSettings defaults() { return new ShaderSettings("greenmarine:portable", Quality.MEDIUM, RayMode.AUTO, false); }
+    static final java.util.Set<String> RETIRED_PACKS=java.util.Set.of("greenmarine:advanced","greenmarine:aurora_rt","greenmarine:portable","greenmarine:radiance");
+    public static ShaderSettings defaults() { return new ShaderSettings("greenmarine:raster", Quality.MEDIUM, RayMode.OFF, false); }
     public static ShaderSettings load(Path path, ShaderSettings previous) {
         try {
             if (!Files.exists(path)) previous.save(path);
@@ -63,7 +68,10 @@ public record ShaderSettings(String pack, Quality quality, RayMode rays, boolean
                 for(var value:entry.getValue().getAsJsonObject().entrySet()) values.put(value.getKey(),value.getValue().getAsFloat());
                 parameters.put(entry.getKey(),values);
             }
-            return new ShaderSettings(json.get("pack").getAsString(), Quality.valueOf(json.get("quality").getAsString().toUpperCase(Locale.ROOT)),
+            String pack=json.get("pack").getAsString();
+            // Demo packs left the release jar in 0.9.4; their saved selection becomes the default pack.
+            if(RETIRED_PACKS.contains(pack)) pack=defaults().pack();
+            return new ShaderSettings(pack, Quality.valueOf(json.get("quality").getAsString().toUpperCase(Locale.ROOT)),
                 RayMode.valueOf(json.get("rays").getAsString().toUpperCase(Locale.ROOT)), json.has("profiling") && json.get("profiling").getAsBoolean(),parameters);
         } catch (IOException | RuntimeException error) {
             GreenMarine.LOGGER.warn("Keeping previous GreenMarine shader settings: {}", error.getMessage()); return previous;

@@ -613,10 +613,58 @@ impl RayState {
         if let Some(surface) = self.surface.as_mut() {
             surface.scene_handle = 0;
             surface.views = [0; 3];
+            surface.skin = 0;
         }
         self.atlas = 0;
         Ok(())
     }
+}
+
+pub const MAX_ACTORS: usize = 16;
+pub const ACTOR_FLOATS: usize = 4 + MAX_ACTORS * 72;
+pub const MAX_EXTENDED_ACTORS: usize = 64;
+pub const EXTENDED_ACTOR_FLOATS: usize = 4 + MAX_EXTENDED_ACTORS * 72;
+const EMPTY_ACTORS: [f32; ACTOR_FLOATS] = [0.; ACTOR_FLOATS];
+
+pub fn validate_surface_actors(data: &[f32]) -> Result<usize, String> {
+    validate_actor_payload(data, MAX_ACTORS, ACTOR_FLOATS)
+}
+pub fn validate_surface_actors_extended(data: &[f32]) -> Result<usize, String> {
+    validate_actor_payload(data, MAX_EXTENDED_ACTORS, EXTENDED_ACTOR_FLOATS)
+}
+pub fn expand_surface_actors(data: &[f32]) -> Result<[f32; EXTENDED_ACTOR_FLOATS], String> {
+    validate_surface_actors(data)?;
+    let mut full = [0.; EXTENDED_ACTOR_FLOATS];
+    full[..ACTOR_FLOATS].copy_from_slice(data);
+    Ok(full)
+}
+fn validate_actor_payload(data: &[f32], max_actors: usize, floats: usize) -> Result<usize, String> {
+    if data.len() != floats
+        || data.iter().any(|v| !v.is_finite())
+        || data[0] < 0.
+        || data[0] > max_actors as f32
+        || data[0].fract() != 0.
+        || data[1..4] != [0.; 3]
+    {
+        return Err("Invalid surface actor payload".into());
+    }
+    let count = data[0] as usize;
+    for actor in data[4..4 + count * 72].chunks_exact(72) {
+        let determinant = actor[0] * (actor[5] * actor[10] - actor[9] * actor[6])
+            - actor[4] * (actor[1] * actor[10] - actor[9] * actor[2])
+            + actor[8] * (actor[1] * actor[6] - actor[5] * actor[2]);
+        if actor[3].abs() > 1e-5
+            || actor[7].abs() > 1e-5
+            || actor[11].abs() > 1e-5
+            || (actor[15] - 1.).abs() > 1e-5
+            || !determinant.is_finite()
+            || determinant.abs() < 1e-12
+            || (0..3).any(|axis| actor[16 + axis] >= actor[20 + axis])
+        {
+            return Err("Invalid surface actor bounds or affine inverse".into());
+        }
+    }
+    Ok(count)
 }
 
 pub struct SurfaceOutputLayout {
@@ -632,7 +680,7 @@ pub fn surface_output_layout(width: u32, height: u32) -> Result<SurfaceOutputLay
         bytes: reflection_offset + image_bytes,
     })
 }
-pub fn surface_descriptor_types() -> [vk::DescriptorType; 7] {
+pub fn surface_descriptor_types() -> [vk::DescriptorType; 9] {
     use vk::DescriptorType as D;
     [
         D::ACCELERATION_STRUCTURE_KHR,
@@ -641,6 +689,8 @@ pub fn surface_descriptor_types() -> [vk::DescriptorType; 7] {
         D::UNIFORM_BUFFER,
         D::COMBINED_IMAGE_SAMPLER,
         D::COMBINED_IMAGE_SAMPLER,
+        D::COMBINED_IMAGE_SAMPLER,
+        D::STORAGE_BUFFER,
         D::COMBINED_IMAGE_SAMPLER,
     ]
 }
@@ -657,6 +707,8 @@ struct SurfaceState {
     sampler: vk::Sampler,
     uniform: Option<Buffer>,
     output: Option<Buffer>,
+    actors: Option<Buffer>,
+    skin: u64,
     views: [u64; 3],
     scene_handle: u64,
     tracked: bool,
@@ -666,6 +718,7 @@ impl Drop for SurfaceState {
     fn drop(&mut self) {
         unsafe {
             self.output.take();
+            self.actors.take();
             self.uniform.take();
             if self.owner.is_none() && self.pipeline != vk::Pipeline::null() {
                 self.device.destroy_pipeline(self.pipeline, None);
@@ -702,6 +755,8 @@ impl SurfaceState {
             sampler: vk::Sampler::null(),
             uniform: None,
             output: None,
+            actors: None,
+            skin: 0,
             views: [0; 3],
             scene_handle: 0,
             tracked: false,
@@ -732,7 +787,7 @@ impl SurfaceState {
             },
             vk::DescriptorPoolSize {
                 ty: types[1],
-                descriptor_count: 2,
+                descriptor_count: 3,
             },
             vk::DescriptorPoolSize {
                 ty: types[3],
@@ -740,7 +795,7 @@ impl SurfaceState {
             },
             vk::DescriptorPoolSize {
                 ty: types[4],
-                descriptor_count: 3,
+                descriptor_count: 4,
             },
         ];
         state.pool = device
@@ -817,6 +872,7 @@ impl SurfaceState {
             state.uniform.as_ref().unwrap(),
             vk::DescriptorType::UNIFORM_BUFFER,
         );
+        state.init_actors()?;
         state.owner = Some(Arc::new(PipelineOwner {
             device: device.clone(),
             layout: state.layout,
@@ -825,6 +881,18 @@ impl SurfaceState {
             sampler: state.sampler,
         }));
         Ok(state)
+    }
+    unsafe fn init_actors(&mut self) -> Result<(), String> {
+        let buffer = Buffer::new(
+            &self.device,
+            &self.memory,
+            (EXTENDED_ACTOR_FLOATS * 4) as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            false,
+        )?;
+        self.bind_buffer(7, &buffer, vk::DescriptorType::STORAGE_BUFFER);
+        self.actors = Some(buffer);
+        Ok(())
     }
     unsafe fn bind_buffer(&self, binding: u32, buffer: &Buffer, ty: vk::DescriptorType) {
         let info = [vk::DescriptorBufferInfo::default()
@@ -858,6 +926,50 @@ impl RayState {
         images: [vk::Image; 2],
         views: [u64; 3],
     ) -> Result<(), String> {
+        self.record_surface_actors(
+            command,
+            frame,
+            width,
+            height,
+            images,
+            views,
+            &EMPTY_ACTORS,
+            0,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn record_surface_actors(
+        &mut self,
+        command: vk::CommandBuffer,
+        frame: &[f32],
+        width: u32,
+        height: u32,
+        images: [vk::Image; 2],
+        views: [u64; 3],
+        actors: &[f32],
+        skin: u64,
+    ) -> Result<(), String> {
+        let full = expand_surface_actors(actors)?;
+        self.record_surface_actors_extended(
+            command, frame, width, height, images, views, &full, skin,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn record_surface_actors_extended(
+        &mut self,
+        command: vk::CommandBuffer,
+        frame: &[f32],
+        width: u32,
+        height: u32,
+        images: [vk::Image; 2],
+        views: [u64; 3],
+        actors: &[f32],
+        skin: u64,
+    ) -> Result<(), String> {
+        let actor_count = validate_surface_actors_extended(actors)?;
+        if actor_count > 0 && skin == 0 {
+            return Err("Missing borrowed actor skin view".into());
+        }
         if let Some(pool) = self.flights.as_mut() {
             if let Some(i) = pool.active {
                 let slot = &mut pool.slots[i];
@@ -866,9 +978,9 @@ impl RayState {
                     .scene
                     .as_ref()
                     .is_some_and(|s| !s.built.load(Ordering::Acquire));
-                let result = slot
-                    .state
-                    .record_surface(command, frame, width, height, images, views);
+                let result = slot.state.record_surface_actors_extended(
+                    command, frame, width, height, images, views, actors, skin,
+                );
                 if was_unbuilt
                     && slot
                         .state
@@ -903,6 +1015,8 @@ impl RayState {
             height,
             images,
             views,
+            actors,
+            if actor_count == 0 { views[0] } else { skin },
         )?;
         self.barrier(command);
         Ok(())
@@ -932,6 +1046,8 @@ impl SurfaceState {
         height: u32,
         images: [vk::Image; 2],
         views: [u64; 3],
+        actors: &[f32],
+        skin: u64,
     ) -> Result<(), String> {
         if command == vk::CommandBuffer::null()
             || images.contains(&vk::Image::null())
@@ -944,10 +1060,31 @@ impl SurfaceState {
         if self.output.as_ref().map(|b| b.size) != Some(layout.bytes)
             || self.views != views
             || self.scene_handle != scene.id
+            || self.skin != skin
         {
             // Descriptor sets cannot be rewritten while previous submissions use them.
             if !self.tracked {
                 rt_wait_idle(&self.device)?;
+            }
+            if self.skin != skin {
+                // Flight leases prevent pending descriptor mutation. A second skin in the
+                // same recording lease would also rewrite the first dispatch's descriptor.
+                if self.tracked && self.skin != 0 {
+                    return Err("Actor skin changed within a recording flight".into());
+                }
+                let info = [vk::DescriptorImageInfo::default()
+                    .sampler(self.sampler)
+                    .image_view(vk::ImageView::from_raw(skin))
+                    .image_layout(vk::ImageLayout::GENERAL)];
+                self.device.update_descriptor_sets(
+                    &[vk::WriteDescriptorSet::default()
+                        .dst_set(self.set)
+                        .dst_binding(8)
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .image_info(&info)],
+                    &[],
+                );
+                self.skin = skin;
             }
             if self.output.as_ref().map(|b| b.size) != Some(layout.bytes) {
                 let buffer = Buffer::new(
@@ -994,6 +1131,14 @@ impl SurfaceState {
                 self.views = views;
             }
         }
+        // vkCmdUpdateBuffer snapshots CPU bytes into the recorded command. This
+        // slot's device-local buffer is not shared with any pending flight.
+        self.device.cmd_update_buffer(
+            command,
+            self.actors.as_ref().unwrap().handle,
+            0,
+            std::slice::from_raw_parts(actors.as_ptr() as *const u8, EXTENDED_ACTOR_FLOATS * 4),
+        );
         self.device.cmd_update_buffer(
             command,
             self.uniform.as_ref().unwrap().handle,
@@ -1254,7 +1399,7 @@ unsafe fn flight_set(
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 2,
+            descriptor_count: if surface { 3 } else { 2 },
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -1262,7 +1407,7 @@ unsafe fn flight_set(
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: if surface { 3 } else { 1 },
+            descriptor_count: if surface { 4 } else { 1 },
         },
     ];
     let pool = device
@@ -1298,6 +1443,8 @@ impl SurfaceState {
             sampler: self.sampler,
             uniform: None,
             output: None,
+            actors: None,
+            skin: 0,
             views: [0; 3],
             scene_handle: 0,
             tracked: true,
@@ -1316,6 +1463,7 @@ impl SurfaceState {
             state.uniform.as_ref().unwrap(),
             vk::DescriptorType::UNIFORM_BUFFER,
         );
+        state.init_actors()?;
         Ok(state)
     }
 }
@@ -1478,6 +1626,7 @@ impl RayState {
         if let Some(surface) = slot.state.surface.as_mut() {
             surface.scene_handle = 0;
             surface.views = [0; 3];
+            surface.skin = 0;
         }
         slot.serial = serial;
         slot.status = LeaseStatus::Recording;

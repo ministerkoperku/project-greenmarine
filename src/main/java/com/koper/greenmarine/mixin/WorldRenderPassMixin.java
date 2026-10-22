@@ -11,10 +11,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(FrontendRenderPass.class)
 public abstract class WorldRenderPassMixin {
     @Shadow private FrontendRenderPipeline boundPipeline;
+    @Unique private final com.koper.greenmarine.client.world.WorldBindingCache greenmarine$bindingCache=new com.koper.greenmarine.client.world.WorldBindingCache();
     @ModifyVariable(method="setPipeline",at=@At("HEAD"),argsOnly=true)
     private CompiledRenderPipeline greenmarine$program(CompiledRenderPipeline pipeline) {return WorldPrograms.select(pipeline);}
     @Inject(method="setPipeline",at=@At("RETURN"))
-    private void greenmarine$bindings(CompiledRenderPipeline pipeline,CallbackInfo ci) {WorldPrograms.bind((RenderPass)(Object)this,boundPipeline);}
+    private void greenmarine$bindings(CompiledRenderPipeline pipeline,CallbackInfo ci) {WorldPrograms.bind((RenderPass)(Object)this,boundPipeline,greenmarine$bindingCache);}
     @Inject(method={"draw","drawIndexed","multiDraw","multiDrawIndexed","drawIndirect","drawIndexedIndirect","drawMultipleIndexed"},at=@At("RETURN"))
     private void greenmarine$drawn(CallbackInfo ci) {WorldPrograms.drawn(boundPipeline);}
 }

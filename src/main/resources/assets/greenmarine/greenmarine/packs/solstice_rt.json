@@ -34,7 +34,7 @@
       "max": 1
     },
     "reflection": {
-      "default": 1,
+      "default": 0.55,
       "min": 0,
       "max": 1
     },
@@ -174,12 +174,19 @@
   ],
   "programs": [
     {
+      "target": "background",
+      "vertex": "greenmarine:core/solstice_background",
+      "fragment": "greenmarine:core/solstice_background"
+    },
+    {
       "target": "terrain",
       "vertex": "greenmarine:core/solstice_terrain",
       "fragment": "greenmarine:core/solstice_terrain",
       "surface": "greenmarine:core/solstice_surface",
+      "surfaceBeforeTerrain": true,
       "worldRays": true,
-      "surfaceOnly": true
+      "surfaceOnly": true,
+      "voxelShadows": true
     },
     {
       "target": "sky",

@@ -67,7 +67,8 @@ public record ShaderPack(String id, String name, String script, List<PackParamet
             if(json.has("programs")) for(var entry:json.getAsJsonArray("programs")) {
                 var program=entry.getAsJsonObject();
                 programs.add(new PackProgram(value(program,"target",PackProgram.Target.TERRAIN),optional(program,"vertex"),
-                    program.get("fragment").getAsString(),program.has("worldRays") && program.get("worldRays").getAsBoolean(),optional(program,"surface"),program.has("surfaceOnly") && program.get("surfaceOnly").getAsBoolean()));
+                    program.get("fragment").getAsString(),program.has("worldRays") && program.get("worldRays").getAsBoolean(),optional(program,"surface"),program.has("surfaceOnly") && program.get("surfaceOnly").getAsBoolean(),program.has("voxelShadows") && program.get("voxelShadows").getAsBoolean(),
+                    program.has("surfaceBeforeTerrain")?program.get("surfaceBeforeTerrain").getAsBoolean():PackProgram.defaultSurfaceBeforeTerrain(program.get("fragment").getAsString(),optional(program,"surface"))));
             }
             return new ShaderPack(id, json.has("name") ? json.get("name").getAsString() : id,
                 optional(json, "script"), parameters, passes,programs);

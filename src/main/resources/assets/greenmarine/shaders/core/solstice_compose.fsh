@@ -21,7 +21,7 @@ void main() {
         materialClass=floor(material.a+.0001);
     }
     if(HistoryInfo.x>.5 && HistoryInfo.y>.5 && dot(current.xyz,current.xyz)>.5
-        && current.w>1e-6 && abs(texture(DepthSampler,texCoord).r-current.w)<max(.000002,abs(current.w)*.002) && materialClass<2.0 && marineParameter(SOL_SURFACE_DEBUG)<.5) {
+        && current.w>1e-6 && abs(texture(DepthSampler,texCoord).r-current.w)<max(.000002,abs(current.w)*.002) && (materialClass<2.0 || materialClass==7.0) && marineParameter(SOL_SURFACE_DEBUG)<.5) {
         vec3 position=marineRelativeWorldPosition(texCoord,current.w);
         vec4 previousClip=HistoryProjection*HistoryView*vec4(position+HistoryCameraDelta.xyz,1.0);
         if(previousClip.w>0.0) {
@@ -50,5 +50,5 @@ void main() {
             }
         }
     }
-    fragColor=vec4(color,cached.a);
+    fragColor=vec4(solOutputDither(color,gl_FragCoord.xy),cached.a);
 }

@@ -15,6 +15,55 @@ public final class NativeRayTracerSmoke {
             var symbols = SymbolLookup.libraryLookup(Path.of(args[0]), NativePlatform.libraryArena(arena));
             var current = new NativeRayTracer(symbols);
             check(current.available(), "legacy RT ABI remains available");
+            check(current.actorsAvailable(), "actor extension available independently");
+            check(current.extendedActorsAvailable(),"extended actor extension available independently");
+            check(current.recordSurfaceActorsExtended(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,ByteBuffer.allocateDirect(18448),0)==-2,
+                "empty extended actors preserve missing-host handling");
+            SymbolLookup noExtended=name->name.equals("greenmarine_surface_rt_actors_extended_api_version") || name.equals("greenmarine_surface_rt_record_actors_extended")?Optional.empty():symbols.find(name);
+            var noExtendedLibrary=new NativeRayTracer(noExtended);
+            check(noExtendedLibrary.actorsAvailable() && !noExtendedLibrary.extendedActorsAvailable(),"extended absence preserves v1 actor availability");
+            check(noExtendedLibrary.recordSurfaceActorsExtended(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,ByteBuffer.allocateDirect(18448),0)==-2,
+                "missing extended API rejects payload without truncation");
+            boolean extendedRejected=false;
+            try {current.recordSurfaceActorsExtended(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,ByteBuffer.allocateDirect(4624),0);}
+            catch(IllegalArgumentException expected) {extendedRejected=true;}
+            check(extendedRejected,"extended API requires exact18448 byte payload");
+            var extendedPayload=ByteBuffer.allocateDirect(18448).order(java.nio.ByteOrder.nativeOrder());
+            extendedPayload.putFloat(0,65);extendedRejected=false;
+            try {current.recordSurfaceActorsExtended(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,extendedPayload,1);}
+            catch(IllegalArgumentException expected) {extendedRejected=true;}
+            check(extendedRejected,"extended actor count65 is rejected before FFM");
+            extendedPayload.putFloat(0,64);
+            for(int box=0;box<64;box++) {
+                int offset=16+box*288;
+                for(int axis=0;axis<4;axis++)extendedPayload.putFloat(offset+axis*20,1);
+                for(int axis=0;axis<3;axis++)extendedPayload.putFloat(offset+80+axis*4,1);
+            }
+            check(current.recordSurfaceActorsExtended(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,extendedPayload,1)==-2,
+                "valid64box payload crosses FFM to missing-host handling");
+
+
+            check(current.recordSurfaceActors(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,ByteBuffer.allocateDirect(4624),0)==-2,
+                "empty actors preserve no-host surface dispatch semantics");
+            boolean invalidActors=false;
+            try {current.recordSurfaceActors(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,ByteBuffer.allocate(4624),0);}
+            catch(IllegalArgumentException expected) {invalidActors=true;}
+            check(invalidActors,"actor payload must use direct memory");
+            invalidActors=false;
+            var invalidPayload=ByteBuffer.allocateDirect(4624).order(java.nio.ByteOrder.nativeOrder());
+            invalidPayload.putFloat(0,17);
+            try {current.recordSurfaceActors(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,invalidPayload,1);}
+            catch(IllegalArgumentException expected) {invalidActors=true;}
+            check(invalidActors,"actor count is bounded before FFM");
+            invalidActors=false;invalidPayload.putFloat(0,0).putFloat(100,Float.NaN);
+            try {current.recordSurfaceActors(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,invalidPayload,0);}
+            catch(IllegalArgumentException expected) {invalidActors=true;}
+            check(invalidActors,"actor payload must be finite before FFM");
+            SymbolLookup noActors=name->name.equals("greenmarine_surface_rt_actors_api_version") || name.equals("greenmarine_surface_rt_record_actors")?Optional.empty():symbols.find(name);
+            var noActorLibrary=new NativeRayTracer(noActors);
+            check(noActorLibrary.surfaceAvailable() && !noActorLibrary.actorsAvailable(), "actor absence preserves surface ABI");
+            check(noActorLibrary.recordSurfaceActors(1,ByteBuffer.allocateDirect(320),1,1,1,2,3,4,5,ByteBuffer.allocateDirect(4624),0)==-2,
+                "legacy actor call falls back to surface dispatch");
             check(current.surfaceAvailable(), "surface RT ABI available independently");
             check(current.initializeSurface(false) == -20, "Off rejects before host access");
             check(current.initializeSurface(true) == -2, "missing host cannot initialize surface state");
@@ -46,7 +95,7 @@ public final class NativeRayTracerSmoke {
             check(surfaceLibrary.beginSubmission(1)==-2, "missing async extension is safe");
         }
         workerMayExitAfterLibraryUnload(Path.of(args[0]));
-        System.out.println("NativeRayTracer smoke: 22 checks plus library lifetime and worker teardown passed");
+        System.out.println("NativeRayTracer smoke: 36 checks plus library lifetime and worker teardown passed");
     }
     private static void workerMayExitAfterLibraryUnload(Path library) throws InterruptedException {
         var ready = new CountDownLatch(1);

@@ -43,7 +43,7 @@ public final class GreenMarineClient implements ClientModInitializer {
             ShaderRuntime.reset();
         }
         if (client.level != null && client.player != null) {
-            if (lightPosition == null && ticks >= 20) placeLight(client);
+            if (config.automaticDemoLight() && lightPosition == null && ticks >= 20) placeLight(client);
             if (lightPosition != null) updateLight();
         }
         if (client.level != null && !client.isPaused()) ticks++;

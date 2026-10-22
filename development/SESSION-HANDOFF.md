@@ -4,6 +4,109 @@ Updated 2026-10-15 for 0.7.0-prototype. This file preserves the
 owner's next direction across sessions. Read the current source before treating
 any historical report as a new bug.
 
+## Current 0.9.5 release-prep delivery (2026-10-22)
+
+Owner log (mclo.gs/gT3fQ6M, Sodium 0.9.3 + KoperLib + KAvatar) showed 0.9.4 lost
+the whole player reflection: ActorAtlas used `withLocation(String)`, which adds
+the `minecraft:` namespace, and its vertex shader used `gl_VertexID` (invalid on
+Vulkan). Both fixed and tested. Sodium + hardware surface RT confirmed working
+by the owner (screenshot, 46 FPS). Surface RT now casts the local player's sun
+shadow from the actor boxes (first-person included). Release jar ships only
+Raster/Seabreeze/Solstice; demo packs moved to `src/samples/resources`, saved
+selections migrate to Raster. Java250/Python59/Rust14; Android JAR exported.
+Next release work: player shadow outside hardware RT, other entities in actor
+payload, owner acceptance.
+
+## Previous 0.9.4 camera-lighting/accessory delivery (2026-10-22)
+
+Native GI no longer rotates its four diffuse rays by a quarter-block positional
+hash (fixed cosine quadrature, `engine/shaders/diffuse_samples.glsl`); this was a
+verified source of lighting jumps while moving the camera. KAvatar accessories
+with different textures use the optional 64-box actor ABI and an owned combined
+atlas. See `2026-10-22-camera-lighting-accessories-plan.md`. Java248/Python59/
+Rust14 passed; Android JAR exported. No device acceptance yet.
+
+## Previous 0.9.3 RT movement/KAvatar delivery (2026-10-22)
+
+Owner confirmed RT-only movement glitches on oxidized copper and also iron, and
+missing KAvatar custom body. Fixed a verified common reconstruction contributor:
+accepted taps were normalized to full validity regardless of missing footprint.
+Support is now accepted/intended weight and scales native coverage once; legacy
+6-arg GLSL stays available. Actual GL fixture changed edge blue255 to64..255 and
+passed five subpixel phases. Do not call the full gameplay symptom resolved.
+
+Copper exposed/weathered/oxidized full-cube profiles use coated dielectric class9,
+neutral F0.04, with actual waxed aliases. No uniform/ABI growth. KAvatar optional
+bridge captures actual posed custom cube body/texture from its shared frame cache,
+with no mandatory dependency or host model mutation. Tests use real Hyper Chibi,
+Baby, walking/UV/deformation/placement fixtures. 16-box/one-texture limits and
+unsupported bodies/accessories are diagnosed; mobs remain outside native targets.
+
+Read `2026-10-22-rt-motion-kavatar-plan.md`, its evidence and updated
+`docs/ACTOR-REFLECTIONS.md`. Java243/Python57/Rust12 plus explicit actor GPU compute
+passed; Bionic actor29 FFM and packaged ABI1 smoke passed. Both natives and JAR
+export checked in owner Android Documents. No fresh device FPS/gameplay acceptance.
+
+## Previous 0.9.2 reflection pipeline delivery (2026-10-22)
+
+The owner said 0.9.1 still looked like an overlay and requested player reflections.
+Do not treat the older scalar fixture as proof that their exact gameplay bug was
+fixed. 0.9.2 moves captured terrain/native dispatch before opaque color rendering
+and composes native light/reflection on the material once, removing post-scene
+native overlay/irradiance ratios. `surfaceBeforeTerrain` is an optional program
+flag; the shipped Solstice program pair defaults early even in renamed packs.
+Legacy program constructors and native ABI1 calls remain available.
+
+The optional actor extension reflects the local animated vanilla body/skin,
+including first-person, slim models and enabled outer skin layers. It uses actual
+polygons/UVs, a separate native payload/borrowed skin view, flight-local GPU data
+and nearer-block rejection. PlayerReflection.detail() reports actual capture
+availability. Armor, cape, held items, other entities, player sun shadows/GI and
+raster-only full-body mirrors remain absent.
+
+Read `2026-10-21-reflection-pipeline-design.md`, its plan, the
+`2026-10-22-reflection-pipeline-evidence.md` report and `docs/ACTOR-REFLECTIONS.md`.
+234 Java tests, 56 Python tests, 12 Rust tests plus separately executed actual
+Vulkan actor-math compute passed; Bionic actor FFM29 checks and packaged native
+smoke passed. Android JAR and report delivered to the owner's Documents folder,
+export bytes checked. Exact gameplay symptom, pose appearance and FPS remain
+unverified; do not promise that all near-block holes/flicker are solved.
+
+## Previous 0.9.1 reflection delivery (2026-10-21)
+
+The owner's latest report concerns near-block reflection holes/flicker, mostly
+tested on metals, diamond and netherite. Glass is untested; water is good. Keep
+water reflection energy and the 0.9.0 ray/tap budgets. Corrected snapped producer
+interpolation and grazing footprint rejection, removed duplicate metal/gem
+roughness energy attenuation, and added actual atlas profiles for diamond and
+netherite in a separate compatible material extension. See
+`2026-10-21-reflection-stability-plan.md`, its evidence, and
+`docs/MATERIAL-EXTENSION.md`.
+
+Actual GLSL planar fixture: 0.9.0 rejected 1458/2340 reflective pixels; 0.9.1
+rejected zero. Eighteen distance/slope/divisor cases passed without holes, plus
+a nearer parallel same-normal metal surface with different reflected color had
+no cross-surface color leakage. This is controlled desktop GL reconstruction,
+not gameplay/Vulkan acceptance. Player meshes are still absent from native RT;
+do not claim this patch implements player reflections or fixes every flicker.
+The owner reported 28 to 36 FPS before this patch; no new FPS measurement exists.
+
+## Previous 0.9.0 delivery (2026-10-21)
+
+Continue from 0.9.0-prototype, not the historical 0.7 baseline above. The owner
+prioritizes renderer/mod performance and public API breadth, plus better UI.
+Added indexed/instanced meshes, opt-in graph transient storage reuse, per-pass
+world binding cache, profiling without renderer reset and paginated touch settings
+with cached CPU/GPU timing and explicit fallback/readiness details.
+
+Read `2026-10-21-renderer-platform-design.md`, plan/evidence, and docs
+`INDEXED-MESHES.md`, `GRAPH-ALLOCATION.md`, `SETTINGS-UI.md`. `.texture` graph
+storage remains persistent; `.transientTexture` explicitly allows reuse. Native
+compute remains internal to RT; general public compute, full scene/material
+capture, world shadow maps/PBR texture loading and volume clouds are backlog.
+Do not imply FPS parity from Vulkan, unit tests or fake-backend command counts.
+Android delivery still requires dual native build + guarded exporter + checksum.
+
 ## Owner direction and authorization
 
 Continue toward a substantial public rendering and shader API for mods and

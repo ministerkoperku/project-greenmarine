@@ -3,6 +3,15 @@ import org.junit.jupiter.api.Test;
 import java.nio.*;
 import static org.junit.jupiter.api.Assertions.*;
 class TriangleSceneTest {
+    @Test void sunlightTransmissionUsesReservedFloatAndSurvivesAssembly() {
+        var builder=new TriangleScene.Builder(0,0,0,1);
+        builder.triangle(new float[]{0,0,0,1,0,0,0,1,0},new float[6],0xFFFFFF,0,true,.96f);
+        var scene=builder.finish();
+        assertEquals(.96f,scene.data().getFloat(92));
+        var assembly=new TriangleScene.Builder(0,0,0,1);assembly.append(scene,16,0,0);
+        assertEquals(.96f,assembly.finish().data().getFloat(92));
+        assertThrows(IllegalArgumentException.class,()->builder.triangle(new float[9],new float[6],0,0,false,Float.NaN));
+    }
     @org.junit.jupiter.api.Test void exactAssemblyTransfersAnImmutableBufferAndRejectsFurtherBuilderWrites() {
         var source=new TriangleScene.Builder(0,0,0,1);
         source.triangle(new float[]{0,0,0,1,0,0,0,1,0},new float[]{0,0,1,0,0,1},0xabcdef,7,true);

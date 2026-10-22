@@ -1,5 +1,9 @@
 # Shaderpacks and API v1
 
+For editable directories/ZIPs loaded directly from the game directory, the raster
+default and the authoring CLI, see [external packs](EXTERNAL-PACKS.md). Existing
+resource-pack loading described below remains available.
+
 A mounted Minecraft resource pack supplies a manifest at
 `assets/<namespace>/greenmarine/packs/<name>.json`. GreenMarine discovers packs
 on resource reload. Mod assets need a resource loader/mounting mechanism or

@@ -10,8 +10,7 @@ import java.util.*;
 public final class GraphExecution extends OwnedResource {
     private final RenderSession session;
     private final RenderGraph graph;
-    private Map<String, TextureHandle> textures = new LinkedHashMap<>();
-    private int width, height;
+    private final GraphTexturePool<TextureHandle> textures;
     private boolean profiling;
     private long frames;
     private double initialSubmissionMs;
@@ -28,24 +27,13 @@ public final class GraphExecution extends OwnedResource {
         check(); return new Timing(frames, initialSubmissionMs, cpu.snapshot(), gpu == null
             ? new com.koper.greenmarine.client.PerformanceSamples.Snapshot(0, 0, 0, 0, 0) : gpu.snapshot());
     }
-    GraphExecution(RenderSession session, RenderGraph graph) { super(session.scope); this.session = session; this.graph = Objects.requireNonNull(graph); }
+    GraphExecution(RenderSession session, RenderGraph graph) {
+        super(session.scope); this.session = session; this.graph = Objects.requireNonNull(graph);
+        textures = new GraphTexturePool<>(graph.allocationPlan());
+    }
     private void prepare(FrameContext frame) {
-        if (width == frame.width() && height == frame.height()) return;
-        var fresh = new LinkedHashMap<String, TextureHandle>();
-        var allocated = new ArrayList<TextureHandle>();
-        try {
-            for (var entry : graph.textures().entrySet()) {
-                var previous = textures.get(entry.getKey()); var spec = entry.getValue();
-                if (previous != null && previous.texture().getWidth(0) == spec.width(frame.width())
-                    && previous.texture().getHeight(0) == spec.height(frame.height())) fresh.put(entry.getKey(), previous);
-                else {
-                    var created = session.texture("GreenMarine graph " + entry.getKey(), spec, frame.width(), frame.height());
-                    allocated.add(created); fresh.put(entry.getKey(), created);
-                }
-            }
-        } catch (RuntimeException | Error e) { allocated.forEach(TextureHandle::close); throw e; }
-        for (var previous : textures.entrySet()) if (fresh.get(previous.getKey()) != previous.getValue()) previous.getValue().close();
-        textures = fresh; width = frame.width(); height = frame.height();
+        textures.prepare(frame.width(), frame.height(), (slot, spec) -> session.texture(
+            "GreenMarine graph slot " + slot, spec, frame.width(), frame.height()));
     }
     public void execute(FrameContext frame) { execute(frame, Map.of()); }
     /** Typed imports belong to this session; frame imports remain borrowed from the host. */
@@ -61,7 +49,7 @@ public final class GraphExecution extends OwnedResource {
         }
         var identities = Collections.newSetFromMap(new IdentityHashMap<com.mojang.renderpearl.api.textures.GpuTexture, Boolean>());
         for (var view : views.values()) if (!identities.add(view.texture())) throw new IllegalArgumentException("Graph imports alias the same physical texture");
-        prepare(frame); textures.forEach((name, texture) -> views.put(name, texture.view()));
+        prepare(frame); graph.allocationPlan().assignments().forEach((name, slot) -> views.put(name, textures.resource(name).view()));
         var encoder = session.device().createCommandEncoder();
         if (profiling && gpu == null) {
             try { gpu = new com.koper.greenmarine.client.GpuTimer(); }
@@ -89,7 +77,7 @@ public final class GraphExecution extends OwnedResource {
         if (width != actualWidth || height != actualHeight || (depth ? !format.hasDepthAspect() : !format.hasColorAspect()))
             throw new IllegalArgumentException("Attachment dimensions/aspect do not match");
     }
-    @Override protected void destroy() { textures.values().forEach(TextureHandle::close); textures.clear(); if (gpu != null) gpu.close(); }
+    @Override protected void destroy() { try { textures.close(); } finally { if (gpu != null) gpu.close(); } }
 
     public static final class PassContext {
         private final RenderSession session;
@@ -106,7 +94,9 @@ public final class GraphExecution extends OwnedResource {
         public FrameContext frame() { check(); return frame; }
         /** Advanced commands must respect the declared resource access and host lifecycle. Do not submit this encoder. */
         public CommandEncoder encoder() { check(); return encoder; }
+        /** Borrowed until this callback ends; never retain the view across passes or executions. */
         public GpuTextureView read(String resource) { return access(resource, declaration.reads()); }
+        /** Borrowed until this callback ends; storage can be reused by a later logical texture. */
         public GpuTextureView write(String resource) { return access(resource, declaration.writes()); }
         private GpuTextureView access(String name, Set<String> allowed) {
             check(); if (!allowed.contains(name)) throw new IllegalArgumentException("Undeclared access in " + declaration.id() + ": " + name);
@@ -114,7 +104,11 @@ public final class GraphExecution extends OwnedResource {
         }
         public Material material(ProgramHandle program) { check(); return new Material(this, program); }
         public void draw(Material material, List<String> colors, String depth, Mesh mesh, boolean clear) {
-            check(); material.check();
+            draw(material,colors,depth,mesh,clear,1,0);
+        }
+        /** Reuses one mesh in a single host draw; nonzero firstInstance requires host support. */
+        public void draw(Material material,List<String> colors,String depth,Mesh mesh,boolean clear,int instances,int firstInstance) {
+            check(); Mesh.validateInstances(instances,firstInstance); material.check();
             if (material.context != this) throw new IllegalArgumentException("Material belongs to another graph pass");
             var pipeline = material.program.definition().pipeline();
             if (colors.isEmpty() || colors.size() != pipeline.getColorTargetStates().size()) throw new IllegalArgumentException("Color attachment count differs from program");
@@ -138,8 +132,8 @@ public final class GraphExecution extends OwnedResource {
             else if (pipeline.getVertexFormatBindings().stream().anyMatch(Objects::nonNull)) throw new IllegalArgumentException("Program requires mesh vertices");
             try (var pass = encoder.createRenderPass(builder.build())) {
                 material.apply(pass);
-                if (mesh != null) pass.setVertexBuffer(0, mesh.buffer.buffer().slice());
-                pass.draw(mesh == null ? 3 : mesh.vertices, 1, 0, 0);
+                if (mesh != null) mesh.draw(pass,instances,firstInstance);
+                else pass.draw(3,instances,0,firstInstance);
             }
         }
     }

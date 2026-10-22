@@ -8,9 +8,20 @@
 #include <greenmarine:solstice_rays.glsl>
 #endif
 #include <greenmarine:solstice.glsl>
+#include <greenmarine:materials.glsl>
+#include <greenmarine:voxel.glsl>
 #ifndef MULTIDRAW_TERRAIN
 #include <minecraft:chunksection.glsl>
 #endif
+float solLocalSunVisibility(vec3 position,vec3 normal) {
+    if(VoxelTracing.x<.5 || SurfaceSun.w<=0.0 || dot(normal,SurfaceSun.xyz)<=0.0) return 1.0;
+    vec3 origin=position+normal*.08;
+    vec3 local=origin-VoxelOriginSize.xyz;
+    float edge=min(min(local.x,local.y),min(local.z,min(32.0-local.x,min(32.0-local.y,32.0-local.z))));
+    if(edge<=0.0) return 1.0;
+    MarineVoxelHit hit=marineVoxelTrace(origin,SurfaceSun.xyz,24.0,true);
+    return hit.hit?1.0-smoothstep(0.0,2.0,edge):1.0;
+}
 uniform sampler2D Sampler0;
 layout(location=0) in float sphericalVertexDistance;
 layout(location=1) in float cylindricalVertexDistance;
@@ -40,20 +51,38 @@ void main() {
 #endif
     if(color.a<.01) discard;
     vec3 base=solLinear(sampled.rgb*surfaceColor.rgb);
-    float puddle=solPuddle(surfacePosition,normal,surfaceLight.y);
+    vec4 material=marineBlockMaterial(texCoord0);
+    float puddle=solPuddle(surfacePosition,normal,surfaceLight.y)*marinePuddleRetention(material.w);
     float wet=clamp(Environment.z*marineParameter(SOL_WETNESS)*surfaceLight.y,0.0,1.0);
-    float roughness=clamp(marineParameter(SOL_ROUGHNESS)*(1.0-wet*.65),.06,.98);
+    float roughness=clamp(material.x*marineParameter(SOL_ROUGHNESS)*(1.0-wet*.65),.06,.98);
     if(water) roughness=.09;
 #ifdef GREENMARINE_SURFACE_CAPTURE
     captureNormalDepth=vec4(normal,gl_FragCoord.z);
-    captureAlbedo=vec4(base,(water?4.0:(puddle>.12?3.0:1.0))+roughness*.5);
+    captureAlbedo=vec4(base,(water?4.0:(puddle>.12?3.0:material.w))+roughness*.5);
 #elif defined(OIT_ALPHA_ONLY)
     executeAlphaOnlyPhase(gl_FragCoord.z,color.a);
 #else
     vec2 uv=gl_FragCoord.xy/Frame.xy;
     vec3 view=normalize(SurfaceEye.xyz-surfacePosition);
     vec3 reflected=reflect(-view,normal);
-    vec3 illumination=solIrradiance(normal,surfaceLight.y,surfaceLight.x);
+    vec4 nativeLight=vec4(0),nativeReflection=vec4(0);
+    float nativeCoverage=0.0;
+    if(!water && SkyColor.w>.5 && marineSurfaceRayReady() && marineParameter(SOL_RAYS)>0.0) {
+        vec4 captured=texture(MarineSurfaceNormalDepth,uv);
+        vec4 capturedMaterial=texture(MarineSurfaceAlbedo,uv);
+        float expectedClass=puddle>.12?3.0:material.w;
+        bool sameSurface=floor(capturedMaterial.a+.0001)==expectedClass
+            && dot(captured.xyz,normal)>.95 && marineOpaqueSurfaceVisible(gl_FragCoord.z,captured.w);
+        float support;
+        if(sameSurface && solSurfaceRays(uv,captured,capturedMaterial,true,nativeLight,nativeReflection,support))
+            nativeCoverage=solRayCoverage(surfacePosition)*marineParameter(SOL_RAYS)*support;
+    }
+    float localVisibility=solLocalSunVisibility(surfacePosition,normal);
+    vec3 illumination=solIrradiance(normal,surfaceLight.y,surfaceLight.x,
+        mix(localVisibility,clamp(nativeLight.a,0.0,1.0),nativeCoverage));
+    float diffuse=max(dot(normal,SurfaceSun.xyz),0.0)*SurfaceSun.w;
+    vec3 indirect=max(nativeLight.rgb-vec3(RayOptions.x+diffuse*nativeLight.a),vec3(0));
+    illumination+=indirect*nativeCoverage;
     vec3 lit=base*illumination*(1.0-wet*.16);
     // Snow is a climate overlay on exposed top faces, preserving atlas textures.
     float snow=Climate.y*marineParameter(SOL_SNOW)*smoothstep(.6,.98,normal.y)*smoothstep(.7,1.0,surfaceLight.y);
@@ -76,23 +105,34 @@ void main() {
         vec3 transmission=exp(-vec3(.38,.10,.052)*max(.15,thickness)*marineParameter(SOL_ABSORPTION));
         vec3 underwater=solLinear(texture(MarineOpaqueColor,refracted).rgb);
         lit=mix(absorptionColor,underwater,transmission);
-        vec3 reflection=solSky(reflected,true);
+        vec3 reflection=solSky(reflected,true)*marineSkyVisibility(surfaceLight.y);
         if(SkyColor.w>.5 && marineSurfaceRayReady()) {
             vec4 captured=texture(MarineSurfaceNormalDepth,uv);
             vec4 capturedMaterial=texture(MarineSurfaceAlbedo,uv);
             bool sameWater=floor(capturedMaterial.a+.0001)==4.0 && dot(captured.xyz,normal)>.92
                 && abs(captured.w-gl_FragCoord.z)<max(.00001,gl_FragCoord.z*.01);
             if(sameWater) {
-                vec4 hit=texture(RayReflection,uv);
-                float coverage=solRayCoverage(surfacePosition)*marineParameter(SOL_RAYS);
-                reflection=mix(reflection,max(hit.rgb,vec3(0)),clamp(hit.a*coverage,0.0,1.0));
+                vec4 unusedLighting,hit;
+                if(solSurfaceRays(uv,captured,capturedMaterial,false,unusedLighting,hit)) {
+                    float coverage=solRayCoverage(surfacePosition)*marineParameter(SOL_RAYS);
+                    reflection=mix(reflection,max(hit.rgb,vec3(0)),clamp(hit.a*coverage,0.0,1.0));
+                }
             }
         }
         float fresnel=.02+.98*pow(1.0-max(dot(normal,view),0.0),5.0);
         lit=mix(lit,reflection,clamp(fresnel*marineParameter(SOL_REFLECTION),0.0,1.0));
     } else if(puddle>.01) {
         float fresnel=.035+.965*pow(1.0-max(dot(normal,view),0.0),5.0);
-        lit=mix(lit,solSky(reflected,true),puddle*fresnel*marineParameter(SOL_REFLECTION));
+        vec3 reflection=solSky(reflected,true)*marineSkyVisibility(surfaceLight.y);
+        reflection=mix(reflection,max(nativeReflection.rgb,vec3(0)),clamp(nativeReflection.a*nativeCoverage,0.0,1.0));
+        lit=mix(lit,reflection,puddle*fresnel*marineParameter(SOL_REFLECTION));
+    } else if(material.y>0.0) {
+        vec3 fresnel=solMaterialFresnel(base,material.w,max(dot(normal,view),0.0));
+        vec3 reflection=solSky(reflected,true)*marineSkyVisibility(surfaceLight.y);
+        reflection=mix(reflection,max(nativeReflection.rgb,vec3(0)),clamp(nativeReflection.a*nativeCoverage,0.0,1.0));
+        vec3 weight=(material.w==2.0 || material.w==8.0)?solSpecularWeight(fresnel,roughness,material.w)
+            :clamp(fresnel*material.y*(1.0-roughness)*marineParameter(SOL_REFLECTION),vec3(0),vec3(1));
+        lit=mix(lit,reflection,weight);
     }
     color.rgb=solDisplay(lit);
     if(water && marineParameter(SOL_WAVE_DEBUG)>.5) color.rgb=vec3(clamp(.5+surfaceWave/.16,0.0,1.0),0,0);

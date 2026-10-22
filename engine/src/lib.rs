@@ -280,6 +280,8 @@ mod surface_rt_contract_tests {
                     D::UNIFORM_BUFFER,
                     D::COMBINED_IMAGE_SAMPLER,
                     D::COMBINED_IMAGE_SAMPLER,
+                    D::COMBINED_IMAGE_SAMPLER,
+                    D::STORAGE_BUFFER,
                     D::COMBINED_IMAGE_SAMPLER
                 ]
         );
@@ -348,6 +350,132 @@ pub unsafe extern "C" fn greenmarine_surface_rt_record(
                     vk::Image::from_raw(reflection),
                 ],
                 [atlas, normal, albedo],
+            )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn greenmarine_surface_rt_actors_api_version() -> u32 {
+    1
+}
+#[no_mangle]
+/// # Safety
+/// Existing surface-record handle/frame rules apply. Actors references exactly
+/// 1156 readable aligned floats (4624 bytes). Skin is a borrowed sampled view in
+/// GENERAL layout, valid through host fence completion; zero is allowed for no actors.
+pub unsafe extern "C" fn greenmarine_surface_rt_record_actors(
+    command: u64,
+    frame: *const f32,
+    width: u32,
+    height: u32,
+    lighting: u64,
+    reflection: u64,
+    atlas: u64,
+    normal: u64,
+    albedo: u64,
+    actors: *const f32,
+    skin: u64,
+) -> i32 {
+    if command == 0
+        || frame.is_null()
+        || actors.is_null()
+        || lighting == 0
+        || reflection == 0
+        || lighting == reflection
+        || atlas == 0
+        || normal == 0
+        || albedo == 0
+    {
+        return -1;
+    }
+    let payload = std::slice::from_raw_parts(actors, rt::ACTOR_FLOATS);
+    let count = match rt::validate_surface_actors(payload) {
+        Ok(count) => count,
+        Err(_) => return -1,
+    };
+    if count > 0 && skin == 0 {
+        return -1;
+    }
+    ray_result(|context| unsafe {
+        context
+            .ray
+            .as_mut()
+            .ok_or("Parent RT pipeline is unavailable")?
+            .record_surface_actors(
+                vk::CommandBuffer::from_raw(command),
+                std::slice::from_raw_parts(frame, 80),
+                width,
+                height,
+                [
+                    vk::Image::from_raw(lighting),
+                    vk::Image::from_raw(reflection),
+                ],
+                [atlas, normal, albedo],
+                payload,
+                skin,
+            )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn greenmarine_surface_rt_actors_extended_api_version() -> u32 {
+    1
+}
+#[no_mangle]
+/// # Safety
+/// Existing surface-record handle/frame rules apply. Actors references exactly
+/// 4612 readable aligned floats (18448 bytes). Skin is a borrowed sampled view in
+/// GENERAL layout, valid through host fence completion; zero is allowed for no actors.
+pub unsafe extern "C" fn greenmarine_surface_rt_record_actors_extended(
+    command: u64,
+    frame: *const f32,
+    width: u32,
+    height: u32,
+    lighting: u64,
+    reflection: u64,
+    atlas: u64,
+    normal: u64,
+    albedo: u64,
+    actors: *const f32,
+    skin: u64,
+) -> i32 {
+    if command == 0
+        || frame.is_null()
+        || actors.is_null()
+        || lighting == 0
+        || reflection == 0
+        || lighting == reflection
+        || atlas == 0
+        || normal == 0
+        || albedo == 0
+    {
+        return -1;
+    }
+    let payload = std::slice::from_raw_parts(actors, rt::EXTENDED_ACTOR_FLOATS);
+    let count = match rt::validate_surface_actors_extended(payload) {
+        Ok(count) => count,
+        Err(_) => return -1,
+    };
+    if count > 0 && skin == 0 {
+        return -1;
+    }
+    ray_result(|context| unsafe {
+        context
+            .ray
+            .as_mut()
+            .ok_or("Parent RT pipeline is unavailable")?
+            .record_surface_actors_extended(
+                vk::CommandBuffer::from_raw(command),
+                std::slice::from_raw_parts(frame, 80),
+                width,
+                height,
+                [
+                    vk::Image::from_raw(lighting),
+                    vk::Image::from_raw(reflection),
+                ],
+                [atlas, normal, albedo],
+                payload,
+                skin,
             )
     })
 }
@@ -693,4 +821,144 @@ pub unsafe extern "C" fn greenmarine_rt_async_stats(output: *mut u64, count: u32
         std::ptr::copy_nonoverlapping(out.as_ptr(), output, 14);
         Ok(0)
     })
+}
+
+#[cfg(test)]
+mod surface_actor_contract_tests {
+    #[test]
+    fn optional_actor_abi_preserves_versions_and_rejects_invalid_handles() {
+        assert_eq!(crate::greenmarine_surface_rt_actors_api_version(), 1);
+        assert_eq!(crate::greenmarine_surface_rt_api_version(), 1);
+        unsafe {
+            assert_eq!(
+                crate::greenmarine_surface_rt_record_actors(
+                    0,
+                    std::ptr::null(),
+                    1,
+                    1,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    std::ptr::null(),
+                    0
+                ),
+                -1
+            );
+        }
+    }
+    #[test]
+    fn actor_payload_is_bounded_finite_affine_and_zero_header_padded() {
+        use crate::rt::{validate_surface_actors, ACTOR_FLOATS};
+        assert_eq!(ACTOR_FLOATS * 4, 4624);
+        let mut data = [0f32; ACTOR_FLOATS];
+        assert_eq!(validate_surface_actors(&data).unwrap(), 0);
+        data[0] = 1.;
+        for axis in 0..4 {
+            data[4 + axis * 5] = 1.;
+        }
+        for axis in 0..3 {
+            data[4 + 20 + axis] = 1.;
+        }
+        assert_eq!(validate_surface_actors(&data).unwrap(), 1);
+        for bad in [-1., 17., 0.5, f32::NAN] {
+            let mut invalid = data;
+            invalid[0] = bad;
+            assert!(validate_surface_actors(&invalid).is_err());
+        }
+        let mut invalid = data;
+        invalid[1] = 1.;
+        assert!(validate_surface_actors(&invalid).is_err());
+        let mut invalid = data;
+        invalid[4 + 3] = 1.;
+        assert!(validate_surface_actors(&invalid).is_err());
+        let mut invalid = data;
+        invalid[4] = 0.;
+        assert!(validate_surface_actors(&invalid).is_err());
+        let mut invalid = data;
+        invalid[4 + 20] = 0.;
+        assert!(validate_surface_actors(&invalid).is_err());
+        let mut invalid = data;
+        invalid[4 + 24] = f32::INFINITY;
+        assert!(validate_surface_actors(&invalid).is_err());
+        assert!(validate_surface_actors(&data[..ACTOR_FLOATS - 1]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod extended_actor_contract_tests {
+    #[test]
+    fn extended_payload_does_not_change_legacy_bounds_and_padding() {
+        use crate::rt::{
+            expand_surface_actors, validate_surface_actors, validate_surface_actors_extended,
+            ACTOR_FLOATS, EXTENDED_ACTOR_FLOATS,
+        };
+        assert_eq!(ACTOR_FLOATS * 4, 4624);
+        assert_eq!(EXTENDED_ACTOR_FLOATS * 4, 18448);
+        let legacy = [0.; ACTOR_FLOATS];
+        let expanded = expand_surface_actors(&legacy).unwrap();
+        assert_eq!(expanded.len() * 4, 18448);
+        assert!(expanded.iter().all(|v| *v == 0.));
+        let mut data = [0.; EXTENDED_ACTOR_FLOATS];
+        data[0] = 64.;
+        for actor in data[4..].chunks_exact_mut(72) {
+            for axis in 0..4 {
+                actor[axis * 5] = 1.;
+            }
+            actor[20..23].fill(1.);
+        }
+        assert_eq!(validate_surface_actors_extended(&data).unwrap(), 64);
+        assert!(validate_surface_actors(&data).is_err());
+        let mut old = [0.; ACTOR_FLOATS];
+        old.copy_from_slice(&data[..ACTOR_FLOATS]);
+        assert!(
+            validate_surface_actors(&old).is_err(),
+            "v1 rejects count64 rather than truncating"
+        );
+        old[0] = 16.;
+        let expanded = expand_surface_actors(&old).unwrap();
+        assert_eq!(&expanded[..ACTOR_FLOATS], &old);
+        assert!(
+            expanded[ACTOR_FLOATS..].iter().all(|v| *v == 0.),
+            "old upload initializes all additional shader slots"
+        );
+        data[0] = 65.;
+        assert!(validate_surface_actors_extended(&data).is_err());
+        data[0] = 64.;
+        data[4 + 63 * 72 + 20] = 0.;
+        assert!(
+            validate_surface_actors_extended(&data).is_err(),
+            "validate the last box bounds"
+        );
+        data[4 + 63 * 72 + 20] = 1.;
+        data[EXTENDED_ACTOR_FLOATS - 1] = f32::NAN;
+        assert!(validate_surface_actors_extended(&data).is_err());
+    }
+    #[test]
+    fn extended_symbols_are_optional_additions() {
+        assert_eq!(
+            crate::greenmarine_surface_rt_actors_extended_api_version(),
+            1
+        );
+        assert_eq!(crate::greenmarine_surface_rt_actors_api_version(), 1);
+        unsafe {
+            assert_eq!(
+                crate::greenmarine_surface_rt_record_actors_extended(
+                    0,
+                    std::ptr::null(),
+                    1,
+                    1,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    std::ptr::null(),
+                    0
+                ),
+                -1
+            );
+        }
+    }
 }

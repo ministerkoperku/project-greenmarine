@@ -11,7 +11,8 @@ public final class RenderPolicy {
             || pack.programs().stream().anyMatch(PackProgram::worldRays));
         if(usesHardware) {
             var selected=rays(requested,quality,caps);
-            boolean worldOnly=!pack.programs().isEmpty() && pack.passes().stream().noneMatch(pass->pass.requires()==PackPass.Requirement.VOXEL_RT);
+            boolean worldOnly=!pack.programs().isEmpty() && pack.programs().stream().noneMatch(PackProgram::voxelShadows)
+                && pack.passes().stream().noneMatch(pass->pass.requires()==PackPass.Requirement.VOXEL_RT);
             if(worldOnly && selected.effective()==RayMode.VOXEL)
                 return new RaySelection(RayMode.OFF,"Hardware RT unavailable for this pack; world programs use raster lighting");
             return selected;

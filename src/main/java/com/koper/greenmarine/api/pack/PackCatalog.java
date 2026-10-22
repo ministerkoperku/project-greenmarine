@@ -7,6 +7,7 @@ import java.util.*;
 import java.util.function.Function;
 
 public final class PackCatalog {
+    private static final java.util.regex.Pattern INCLUDE = java.util.regex.Pattern.compile("(?m)^\\s*#include\\s*[<\"]([^>\"]+)[>\"]");
     public record LoadedPack(ShaderPack definition, String script, Map<String, String> sources,Map<String,ShaderBinary> binaries) {
         public LoadedPack { sources = Map.copyOf(sources); binaries=Map.copyOf(binaries); }
         public LoadedPack(ShaderPack definition,String script,Map<String,String> sources) { this(definition,script,sources,Map.of()); }
@@ -20,10 +21,22 @@ public final class PackCatalog {
         return reload(manifests,resources,id->null);
     }
     public synchronized boolean reload(Map<String,String> manifests,Function<String,String> resources,Function<String,byte[]> binaryResources) {
+        return reload(manifests.entrySet().stream().map(entry ->
+            new PackSource(entry.getKey(), entry.getValue(), resources, binaryResources)).toList());
+    }
+
+    /** Atomically replaces resource packs; independent sources may reuse shader resource names. */
+    public synchronized boolean reload(List<PackSource> manifests) {
         var staging = new LinkedHashMap<String, LoadedPack>();
+        String origin = "catalog";
         try {
             if (manifests.size() > 64) throw new IllegalArgumentException("At most 64 shaderpacks are supported");
-            for (String source : manifests.values()) {
+            for (var input : manifests) {
+                origin = input.origin();
+                String source = input.manifest();
+                var cache = new HashMap<String, String>();
+                Function<String, String> resources = id -> cache.computeIfAbsent(id, input.resources());
+                var binaryResources = input.binaries();
                 if (source.length() > 65_536) throw new IllegalArgumentException("Pack manifest exceeds 64 KiB");
                 var pack = ShaderPack.parse(JsonParser.parseString(source).getAsJsonObject());
                 var shaders = new LinkedHashMap<String, String>();
@@ -51,13 +64,13 @@ public final class PackCatalog {
             }
             snapshot = Collections.unmodifiableMap(staging); generation++; error = ""; return true;
         } catch (RuntimeException exception) {
-            error = exception.getMessage(); return false;
+            error = origin + ": " + exception.getMessage(); return false;
         }
     }
 
     private static void loadIncludes(String text,Map<String,String> sources,Function<String,String> resources,Set<String> visiting,int depth) {
         if(depth>16 || sources.size()>80) throw new IllegalArgumentException("Shader include limit exceeded");
-        var matcher=java.util.regex.Pattern.compile("(?m)^\\s*#include\\s*[<\"]([^>\"]+)[>\"]").matcher(text);
+        var matcher=INCLUDE.matcher(text);
         while(matcher.find()) {
             String id=matcher.group(1); ShaderPack.requireId(id);
             if(!visiting.add(id)) throw new IllegalArgumentException("Cyclic shader include: "+id);

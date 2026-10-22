@@ -12,6 +12,11 @@ class GreenConfigTest {
         assertEquals(0x33ff99, config.color());
     }
 
+    @Test void automaticDiagnosticLightIsOptIn() {
+        assertFalse(GreenConfig.defaults().automaticDemoLight());
+        assertTrue(GreenConfig.parse(JsonParser.parseString("{\"automaticDemoLight\":true}").getAsJsonObject()).automaticDemoLight());
+    }
+
     @Test void rejectsNonFiniteAndExcessiveShaderParameters() {
         for (String json : new String[]{"{\"intensity\":-1}", "{\"intensity\":17}",
                 "{\"bloomStrength\":1e100}", "{\"bloomRadius\":0}", "{\"pulseSpeed\":-1}",

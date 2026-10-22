@@ -8,7 +8,8 @@ import static java.lang.foreign.ValueLayout.*;
 /** Additive RT ABI v1; all device/command/image handles are borrowed from the verified host. */
 public final class NativeRayTracer {
     private MethodHandle init,scene,record,reset;
-    private MethodHandle surfaceInit,surfaceRecord;
+    private MethodHandle surfaceInit,surfaceRecord,surfaceActorsRecord,surfaceActorsExtendedRecord;
+    public static final int SURFACE_ACTOR_BYTES=4624, SURFACE_EXTENDED_ACTOR_BYTES=18448;
     private String surfaceError="Surface RT native module is unavailable";
     private volatile String error="RT native module is unavailable";
     private MethodHandle asyncBegin,asyncSubmitted,asyncCompleted,asyncCancel,prepare,publish,discard,sceneAsync,resetAsync,prepareStatusHandle,prepareErrorHandle,asyncStatsHandle;
@@ -36,6 +37,20 @@ public final class NativeRayTracer {
             surfaceRecord=linker.downcallHandle(symbols.find("greenmarine_surface_rt_record").orElseThrow(),FunctionDescriptor.of(JAVA_INT,JAVA_LONG,ADDRESS,JAVA_INT,JAVA_INT,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG));
             surfaceError="";
         } catch(Throwable failed) {surfaceInit=surfaceRecord=null;surfaceError="Surface RT module unavailable: "+failed.getMessage();}
+        try {
+            var linker=Linker.nativeLinker();
+            var version=linker.downcallHandle(symbols.find("greenmarine_surface_rt_actors_api_version").orElseThrow(),FunctionDescriptor.of(JAVA_INT));
+            if((int)version.invokeExact()!=1) throw new IllegalStateException("Unsupported surface actor ABI");
+            surfaceActorsRecord=linker.downcallHandle(symbols.find("greenmarine_surface_rt_record_actors").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT,JAVA_LONG,ADDRESS,JAVA_INT,JAVA_INT,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,ADDRESS,JAVA_LONG));
+        } catch(Throwable unavailable) {surfaceActorsRecord=null;}
+        try {
+            var linker=Linker.nativeLinker();
+            var version=linker.downcallHandle(symbols.find("greenmarine_surface_rt_actors_extended_api_version").orElseThrow(),FunctionDescriptor.of(JAVA_INT));
+            if((int)version.invokeExact()!=1) throw new IllegalStateException("Unsupported surface actor ABI");
+            surfaceActorsExtendedRecord=linker.downcallHandle(symbols.find("greenmarine_surface_rt_record_actors_extended").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT,JAVA_LONG,ADDRESS,JAVA_INT,JAVA_INT,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,ADDRESS,JAVA_LONG));
+        } catch(Throwable unavailable) {surfaceActorsExtendedRecord=null;}
         try {
             var linker=Linker.nativeLinker();
             var version=linker.downcallHandle(symbols.find("greenmarine_rt_async_api_version").orElseThrow(),FunctionDescriptor.of(JAVA_INT));
@@ -102,6 +117,56 @@ public final class NativeRayTracer {
             int code=(int)surfaceRecord.invokeExact(command,MemorySegment.ofBuffer(frame),width,height,
                 lightingImage,reflectionImage,atlasView,surfaceNormalView,surfaceAlbedoView);
             surfaceError=code==0?"":"Surface ray query dispatch failed (native status "+code+")";
+            return code;
+        } catch(Throwable failed) {surfaceError=failed.toString();return -3;}
+    }
+
+    public boolean actorsAvailable() {return surfaceAvailable() && surfaceActorsRecord!=null;}
+    /** Actor payload is copied during recording; the borrowed GENERAL-layout skin view must
+     * remain live until this submission's host fence completes. Legacy modules ignore actors. */
+    public int recordSurfaceActors(long command,ByteBuffer frame,int width,int height,long lightingImage,long reflectionImage,
+        long atlasView,long surfaceNormalView,long surfaceAlbedoView,ByteBuffer actors,long skin) {
+        if(!actorsAvailable())return recordSurface(command,frame,width,height,lightingImage,reflectionImage,atlasView,surfaceNormalView,surfaceAlbedoView);
+        if(!frame.isDirect() || frame.remaining()!=320)throw new IllegalArgumentException("Invalid native surface frame ABI");
+        if(command==0 || width<1 || height<1 || lightingImage==0 || reflectionImage==0 || lightingImage==reflectionImage
+            || atlasView==0 || surfaceNormalView==0 || surfaceAlbedoView==0)throw new IllegalArgumentException("Invalid native surface handles or dimensions");
+        if(actors==null || !actors.isDirect() || actors.remaining()!=SURFACE_ACTOR_BYTES)throw new IllegalArgumentException("Invalid surface actor ABI");
+        var payload=actors.duplicate().order(java.nio.ByteOrder.nativeOrder());
+        int base=payload.position();float count=payload.getFloat(base);
+        if(!Float.isFinite(count) || count<0 || count>16 || count!=(int)count || (count>0 && skin==0))throw new IllegalArgumentException("Invalid actor count or skin");
+        for(int offset=0;offset<SURFACE_ACTOR_BYTES;offset+=4)
+            if(!Float.isFinite(payload.getFloat(base+offset)))throw new IllegalArgumentException("Non-finite actor payload");
+        for(int offset=4;offset<16;offset+=4)
+            if(payload.getFloat(base+offset)!=0)throw new IllegalArgumentException("Invalid actor header padding");
+        try {
+            int code=(int)surfaceActorsRecord.invokeExact(command,MemorySegment.ofBuffer(frame),width,height,
+                lightingImage,reflectionImage,atlasView,surfaceNormalView,surfaceAlbedoView,MemorySegment.ofBuffer(actors),skin);
+            surfaceError=code==0?"":"Surface actor ray query dispatch failed (native status "+code+")";
+            return code;
+        } catch(Throwable failed) {surfaceError=failed.toString();return -3;}
+    }
+
+    public boolean extendedActorsAvailable() {return surfaceAvailable() && surfaceActorsExtendedRecord!=null;}
+    /** Actor payload is copied during recording; the borrowed GENERAL-layout skin view must
+     * remain live until this submission's host fence completes. Unavailable extended modules reject the call; payloads are never truncated. */
+    public int recordSurfaceActorsExtended(long command,ByteBuffer frame,int width,int height,long lightingImage,long reflectionImage,
+        long atlasView,long surfaceNormalView,long surfaceAlbedoView,ByteBuffer actors,long skin) {
+        if(!extendedActorsAvailable()) {surfaceError="Extended surface actor module unavailable";return -2;}
+        if(!frame.isDirect() || frame.remaining()!=320)throw new IllegalArgumentException("Invalid native surface frame ABI");
+        if(command==0 || width<1 || height<1 || lightingImage==0 || reflectionImage==0 || lightingImage==reflectionImage
+            || atlasView==0 || surfaceNormalView==0 || surfaceAlbedoView==0)throw new IllegalArgumentException("Invalid native surface handles or dimensions");
+        if(actors==null || !actors.isDirect() || actors.remaining()!=SURFACE_EXTENDED_ACTOR_BYTES)throw new IllegalArgumentException("Invalid surface actor ABI");
+        var payload=actors.duplicate().order(java.nio.ByteOrder.nativeOrder());
+        int base=payload.position();float count=payload.getFloat(base);
+        if(!Float.isFinite(count) || count<0 || count>64 || count!=(int)count || (count>0 && skin==0))throw new IllegalArgumentException("Invalid actor count or skin");
+        for(int offset=0;offset<SURFACE_EXTENDED_ACTOR_BYTES;offset+=4)
+            if(!Float.isFinite(payload.getFloat(base+offset)))throw new IllegalArgumentException("Non-finite actor payload");
+        for(int offset=4;offset<16;offset+=4)
+            if(payload.getFloat(base+offset)!=0)throw new IllegalArgumentException("Invalid actor header padding");
+        try {
+            int code=(int)surfaceActorsExtendedRecord.invokeExact(command,MemorySegment.ofBuffer(frame),width,height,
+                lightingImage,reflectionImage,atlasView,surfaceNormalView,surfaceAlbedoView,MemorySegment.ofBuffer(actors),skin);
+            surfaceError=code==0?"":"Surface actor ray query dispatch failed (native status "+code+")";
             return code;
         } catch(Throwable failed) {surfaceError=failed.toString();return -3;}
     }

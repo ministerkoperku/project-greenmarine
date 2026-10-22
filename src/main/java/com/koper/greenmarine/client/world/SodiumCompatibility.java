@@ -44,7 +44,8 @@ public final class SodiumCompatibility {
                 && "greenmarine:core/solstice_terrain".equals(program.fragment())
                 && (program.surface() == null || "greenmarine:core/solstice_surface".equals(program.surface()))
             || "greenmarine:core/seabreeze_terrain".equals(program.vertex())
-                && "greenmarine:core/seabreeze_terrain".equals(program.fragment()) && program.surface() == null);
+                && ("greenmarine:core/seabreeze_terrain".equals(program.fragment())
+                    || "greenmarine:core/raster_terrain".equals(program.fragment())) && program.surface() == null);
     }
 
     static RenderPipeline prepare(RenderPipeline original) {

@@ -150,6 +150,7 @@ public final class PackRenderer {
                 try { gpuTimer=new GpuTimer(); }
                 catch(RuntimeException unavailable) { GreenMarine.LOGGER.warn("Unable to create GPU profiler: {}",unavailable.getMessage()); }
             }
+            if(!settings.profiling() && gpuTimer!=null) {gpuTimer.close();gpuTimer=null;}
             int measurement=sceneFrames>=40 && gpuTimer!=null?gpuTimer.begin(encoder):-1;
             GpuTextureView input = main.getColorTextureView(); TextureTarget last = null;
             var camera = renderer.gameRenderState().levelRenderState.cameraRenderState;

@@ -8,10 +8,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 public record GreenConfig(boolean enabled, String effectId, int color, float intensity, float bloomThreshold,
-                          float bloomStrength, float bloomRadius, float pulseSpeed, float radius) {
+                          float bloomStrength, float bloomRadius, float pulseSpeed, float radius, boolean automaticDemoLight) {
     public static final String DEFAULT_JSON = """
         {
           "enabled": true,
+          "automaticDemoLight": false,
           "color": "#33ff99",
           "intensity": 1.5,
           "radius": 4.0,
@@ -35,6 +36,11 @@ public record GreenConfig(boolean enabled, String effectId, int color, float int
     }
 
     public GreenConfig(boolean enabled, String effectId, int color, float intensity, float bloomThreshold,
+                       float bloomStrength, float bloomRadius, float pulseSpeed, float radius) {
+        this(enabled, effectId, color, intensity, bloomThreshold, bloomStrength, bloomRadius, pulseSpeed, radius, false);
+    }
+
+    public GreenConfig(boolean enabled, String effectId, int color, float intensity, float bloomThreshold,
                        float bloomStrength, float bloomRadius, float pulseSpeed) {
         this(enabled, effectId, color, intensity, bloomThreshold, bloomStrength, bloomRadius, pulseSpeed, 4);
     }
@@ -47,7 +53,8 @@ public record GreenConfig(boolean enabled, String effectId, int color, float int
                 json.has("effect") ? json.get("effect").getAsString() : "greenmarine:config",
                 Integer.parseInt(hex.substring(1), 16), number(json, "intensity", 1.5f),
                 number(json, "bloomThreshold", 0.65f), number(json, "bloomStrength", 0),
-                number(json, "bloomRadius", 2), number(json, "pulseSpeed", 1), number(json, "radius", 4));
+                number(json, "bloomRadius", 2), number(json, "pulseSpeed", 1), number(json, "radius", 4),
+                json.has("automaticDemoLight") && json.get("automaticDemoLight").getAsBoolean());
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Invalid GreenMarine configuration", error);
         }

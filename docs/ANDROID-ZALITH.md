@@ -1,5 +1,13 @@
 # Android ARM64 / Zalith installation and verification
 
+0.8.4 corrects the 0.8.3 host-only delivery regression. Before Android delivery,
+build both native targets with the flags below and run
+`python3 tools/export-android-mod.py build/libs/greenmarine-0.8.4-prototype.jar`.
+The exporter checks the actual packaged AArch64/Bionic ELF and refuses a missing
+Android library, Linux dependencies or embedded RPATH/RUNPATH. It then verifies
+the copy in `/storage/emulated/0/Documents/koper/recents/`. A successful Linux
+host build alone does not establish a usable Android distribution.
+
 GreenMarine 0.8.1 adds Android ARM64 native library selection and packaging.
 The requested device is a Poco F8 Pro running Zalith. The owner now reports
 working Solstice RT shadows at approximately 60 FPS with low chunk-generation

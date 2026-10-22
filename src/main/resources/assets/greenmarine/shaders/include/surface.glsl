@@ -1,6 +1,7 @@
 #ifndef GREENMARINE_SURFACE_V1
 #define GREENMARINE_SURFACE_V1
 #include <greenmarine:frame.glsl>
+#include <greenmarine:sky_visibility.glsl>
 layout(std140) uniform MarineSurfaceFrame {
     vec4 SurfaceInfo; // Opaque readiness, rain, reserved, reserved.
     vec4 SurfaceOrigin; // Physical camera position modulo 4096.

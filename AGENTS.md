@@ -1,5 +1,13 @@
 # GreenMarine contributor instructions
 
+Owner delivery preference: export finished mod artifacts to Android shared storage
+at `/storage/emulated/0/Documents/koper/recents/`, never `/root/Documents` or another
+Linux-home delivery directory. Verify exported files against the build outputs.
+Android delivery must contain the actual Android/Bionic ARM64 native library.
+Build with `-PandroidNative=true` and the Android linker documented in
+`docs/ANDROID-ZALITH.md`; use `tools/export-android-mod.py` to verify and export.
+Never export a host-only Linux JAR as an Android release.
+
 Read `../AGENTS.md` in the workspace and this file before editing.
 
 GreenMarine is a standalone Fabric mod targeting Minecraft 26.3 and Java 25.

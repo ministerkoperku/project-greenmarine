@@ -1,0 +1,13 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x=1) in;
+#include "surface_actors.glsl"
+layout(std430,set=0,binding=0) buffer Results {vec4 results[];};
+struct Query {vec4 origin;vec4 directionReach;};
+layout(std430,set=0,binding=1) readonly buffer Queries {Query queries[];};
+void main() {
+    uint i=gl_GlobalInvocationID.x;
+    ActorHit hit=traceActors(queries[i].origin.xyz,queries[i].directionReach.xyz,queries[i].directionReach.w);
+    results[i*2]=vec4(hit.normal,hit.found?hit.distance:-1.0);
+    results[i*2+1]=vec4(hit.albedo,hit.found?1.0:0.0);
+}

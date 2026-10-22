@@ -3,11 +3,13 @@
 GreenMarine is a standalone shaderpack and mod-effects platform for Minecraft
 26.3. Vulkan is the primary backend; OpenGL uses the same Renderpearl passes.
 Packs combine JSON declarations, an extended Lua API and GLSL, with optional
-precompiled fragment SPIR-V on Vulkan. The built-in Portable and Advanced packs
-include a real lightmap stage. Point lights use world positions and radius;
-optional voxel rays give opaque full-block shadows without hardware RT.
-The new Radiance pack traces world voxel materials to receive diffuse light
-from emissive blocks, including sources outside the visible image.
+precompiled fragment SPIR-V on Vulkan. Release builds ship three packs:
+**Marine Raster** (default, lightweight), **Seabreeze** world shaders and
+**Solstice RT** (full material/RT pipeline). The older fullscreen demo packs
+(Portable, Advanced, Radiance, Aurora RT) moved to `src/samples/resources` as API
+fixtures for tests and probes; saved selections of them migrate to Raster.
+Point lights use world positions and radius; optional voxel rays give opaque
+full-block shadows without hardware RT.
 
 Solstice RT adds actual terrain/water shaders, independent material buffers,
 hardware offscreen reflections and diffuse rays, atmosphere/weather, wet ground,
@@ -61,7 +63,7 @@ queue, atlas and submission ownership. See [hardware RT](HARDWARE-RT.md).
 
 ```json
 {
-  "pack": "greenmarine:portable",
+  "pack": "greenmarine:raster",
   "quality": "medium",
   "rays": "auto",
   "profiling": false

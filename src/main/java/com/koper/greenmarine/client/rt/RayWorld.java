@@ -274,12 +274,15 @@ public final class RayWorld {
                 if(!nativeRt.surfaceAvailable() || nativeRt.initializeSurface(true)!=0)throw new IllegalStateException(nativeRt.surfaceError());
                 surfaceInitialized=true;
             }
-            int w=Math.max(1,(viewportWidth+1)/2),h=Math.max(1,(viewportHeight+1)/2);
+            var size=SurfaceRayResolution.forPack(ShaderRuntime.active().definition().id(),ShaderRuntime.settings().quality(),viewportWidth,viewportHeight);
+            int w=size.width(),h=size.height();
             var encoder=RenderSystem.getDevice().createCommandEncoder();
             if(w!=surfaceWidth || h!=surfaceHeight) {
                 pollSubmissions(true);closeSurfaceTargets();surfaceColor=texture("surface ray lighting",GpuFormat.RGBA16_FLOAT,w,h);reflection=texture("traced surface reflection",GpuFormat.RGBA16_FLOAT,w,h);
                 surfaceColorView=RenderSystem.getDevice().createTextureView(surfaceColor);reflectionView=RenderSystem.getDevice().createTextureView(reflection);
                 encoder.clearColorTexture(surfaceColor,new Vector4f());encoder.clearColorTexture(reflection,new Vector4f());surfaceWidth=w;surfaceHeight=h;
+                GreenMarine.LOGGER.info("Surface RT target: pack={}, quality={}, output={}x{}, capture={}x{}",
+                    ShaderRuntime.active().definition().id(),ShaderRuntime.settings().quality(),w,h,viewportWidth,viewportHeight);
             }
             if(ShaderRuntime.settings().profiling() && surfaceGpu==null)surfaceGpu=new GpuTimer();
             if(!ShaderRuntime.settings().profiling() && surfaceGpu!=null) {surfaceGpu.close();surfaceGpu=null;}
@@ -287,17 +290,30 @@ public final class RayWorld {
             lease=beginSubmission();if(lease<0){surfaceDetail="RT submission slots busy; raster surface fallback";return;}
             int measure=surfaceGpu!=null && surfaceFrames>=40?surfaceGpu.begin(encoder):-1;
             var atlas=Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS).getTextureView();
+            // Extended modules take 64 boxes plus the combined accessory atlas; legacy keeps 16 boxes/one skin.
+            boolean extendedActors=nativeRt.extendedActorsAvailable();
+            var player=(extendedActors || nativeRt.actorsAvailable()) && scene!=null
+                ?PlayerReflection.snapshot(Minecraft.getInstance(),scene.x(),scene.y(),scene.z(),extendedActors):null;
+            var skin=player!=null && player.boxes()>0 && player.skin()!=null?player.skin():atlas;
             var backend=(VulkanCommandEncoder)((FrontendCommandEncoder)encoder).backend();var command=backend.allocateAndBeginTransientCommandBuffer();
-            int result=nativeRt.recordSurface(command.address(),FRAME,w,h,((VulkanGpuTexture)surfaceColor).vkImage(),((VulkanGpuTexture)reflection).vkImage(),
-                ((VulkanGpuTextureView)atlas).vkImageView(),((VulkanGpuTextureView)normalDepth).vkImageView(),((VulkanGpuTextureView)material).vkImageView());
+            int result=player==null
+                ?nativeRt.recordSurface(command.address(),FRAME,w,h,((VulkanGpuTexture)surfaceColor).vkImage(),((VulkanGpuTexture)reflection).vkImage(),
+                    ((VulkanGpuTextureView)atlas).vkImageView(),((VulkanGpuTextureView)normalDepth).vkImageView(),((VulkanGpuTextureView)material).vkImageView())
+                :extendedActors?nativeRt.recordSurfaceActorsExtended(command.address(),FRAME,w,h,((VulkanGpuTexture)surfaceColor).vkImage(),((VulkanGpuTexture)reflection).vkImage(),
+                    ((VulkanGpuTextureView)atlas).vkImageView(),((VulkanGpuTextureView)normalDepth).vkImageView(),((VulkanGpuTextureView)material).vkImageView(),
+                    player.data(),((VulkanGpuTextureView)skin).vkImageView())
+                :nativeRt.recordSurfaceActors(command.address(),FRAME,w,h,((VulkanGpuTexture)surfaceColor).vkImage(),((VulkanGpuTexture)reflection).vkImage(),
+                    ((VulkanGpuTextureView)atlas).vkImageView(),((VulkanGpuTextureView)normalDepth).vkImageView(),((VulkanGpuTextureView)material).vkImageView(),
+                    player.data(),((VulkanGpuTextureView)skin).vkImageView());
             if(result!=0)throw new IllegalStateException(nativeRt.surfaceError());
             int ended=org.lwjgl.vulkan.VK12.vkEndCommandBuffer(command);if(ended!=0)throw new IllegalStateException("Unable to finish surface rays: "+ended);
             if(lease>0)fence=encoder.createFence();
             backend.execute(command);executed=true;
-            var submission=queued(encoder,lease,fence,surfaceColor,reflection,atlas,normalDepth,material);lease=0;
+            var submission=queued(encoder,lease,fence,surfaceColor,reflection,atlas,normalDepth,material,skin);lease=0;
             if(surfaceGpu!=null)surfaceGpu.end(encoder,measure);
             submit(encoder,submission);surfaceFrames++;surfaceReady=true;
-            surfaceDetail="Hardware surface RT active: raster materials, sun/GI and offscreen model reflections";
+            surfaceDetail="Hardware surface RT active: raster materials, sun/GI and offscreen model reflections; "
+                +(player==null?"local player extension unavailable":PlayerReflection.detail());
             if(surfaceFrames>40)SURFACE_CPU.add((System.nanoTime()-started)/1e6);
         } catch(RuntimeException|LinkageError error) {
             surfaceFailed=true;surfaceDetail="Surface RT unavailable: "+error.getMessage()+"; raster surface fallback";GreenMarine.LOGGER.error(surfaceDetail,error);
@@ -349,7 +365,7 @@ public final class RayWorld {
             preparation=null;
         }
         if(prepared!=null && prepared.token()!=0)nativeRt.discardPreparedScene(prepared.token());prepared=null;
-        pollSubmissions(true);SCAN.reset();requestedRevision=publishedRevision=-1;requestedContent=null;
+        pollSubmissions(true);PlayerReflection.close();SCAN.reset();requestedRevision=publishedRevision=-1;requestedContent=null;
         generation=submittedGeneration=lastPublishNanos=lastSubmitNanos=packNanos=prepareNanos=publishNanos=busyCount=discarded=0;
         if(nativeRt!=null && initialized) nativeRt.resetScene();
         scene=null;ready=reported=surfaceReady=surfaceFailed=frameReady=false;surfaceFrames=0;SURFACE_CPU.clear();closeSurfaceTargets();

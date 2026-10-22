@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_query : require
+#extension GL_GOOGLE_include_directive : require
 layout(local_size_x=8,local_size_y=8) in;
 layout(set=0,binding=0) uniform accelerationStructureEXT World;
 struct Triangle { vec4 a; vec4 b; vec4 c; vec4 uv01; vec4 uv2; vec4 tint; };
@@ -11,7 +12,8 @@ layout(std140,set=0,binding=3) uniform TraceFrame {
 };
 layout(set=0,binding=4) uniform sampler2D Atlas;
 vec2 triangleUV(Triangle t,vec2 bary) { return t.uv01.xy*(1.0-bary.x-bary.y)+t.uv01.zw*bary.x+t.uv2.xy*bary.y; }
-vec4 surface(Triangle t,vec2 bary) { return textureLod(Atlas,triangleUV(t,bary),0.0)*vec4(t.tint.rgb,1); }
+vec4 triangleSurface(Triangle t,vec2 bary) { return textureLod(Atlas,triangleUV(t,bary),0.0)*vec4(t.tint.rgb,1); }
+#include "sun_transmission.glsl"
 struct Hit { bool found; float distance; uint primitive; vec2 bary; };
 Hit trace(vec3 origin,vec3 direction,float reach) {
     rayQueryEXT ray;
@@ -20,7 +22,7 @@ Hit trace(vec3 origin,vec3 direction,float reach) {
         if(rayQueryGetIntersectionTypeEXT(ray,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
             uint index=rayQueryGetIntersectionPrimitiveIndexEXT(ray,false);
             Triangle t=triangles[index];
-            if(t.uv2.z<.5 || surface(t,rayQueryGetIntersectionBarycentricsEXT(ray,false)).a>.1) rayQueryConfirmIntersectionEXT(ray);
+            if(t.uv2.z<.5 || triangleSurface(t,rayQueryGetIntersectionBarycentricsEXT(ray,false)).a>.1) rayQueryConfirmIntersectionEXT(ray);
         }
     }
     Hit hit;hit.found=rayQueryGetIntersectionTypeEXT(ray,true)==gl_RayQueryCommittedIntersectionTriangleEXT;
@@ -29,7 +31,7 @@ Hit trace(vec3 origin,vec3 direction,float reach) {
     hit.bary=hit.found?rayQueryGetIntersectionBarycentricsEXT(ray,true):vec2(0);
     return hit;
 }
-float hash(float value) { return fract(sin(value*12.9898)*43758.5453); }
+#include "diffuse_samples.glsl"
 void main() {
     uvec2 p=gl_GlobalInvocationID.xy;uint width=uint(Viewport.x),height=uint(Viewport.y);
     if(p.x>=width || p.y>=height) return;
@@ -44,23 +46,19 @@ void main() {
         Triangle t=triangles[hit.primitive];vec3 normal=normalize(cross(t.b.xyz-t.a.xyz,t.c.xyz-t.a.xyz));
         if(dot(normal,direction)>0) normal=-normal;
         vec3 pos=origin+direction*hit.distance;
-        vec3 base=pow(max(surface(t,hit.bary).rgb,vec3(0)),vec3(2.2));
+        vec3 base=pow(max(triangleSurface(t,hit.bary).rgb,vec3(0)),vec3(2.2));
         vec3 sun=normalize(Sun.xyz);float diffuse=max(dot(normal,sun),0.0);
-        bool occluded=Sun.w>0 && diffuse>0 && trace(pos+normal*.025,sun,32.0).found;
+        float visibility=Sun.w>0 && diffuse>0?traceSunTransmission(pos+normal*.025,sun,32.0):0.0;
         // Store irradiance independently of texture color. Filtering radiance/albedo ratios amplifies dark texels.
-        vec3 irradiance=vec3(Options.x+(occluded?0.0:diffuse*Sun.w));
+        vec3 irradiance=vec3(Options.x+visibility*diffuse*Sun.w);
         irradiance+=vec3(t.uv2.w*.45);
         if(Options.y>0) {
-            vec3 tangent=normalize(abs(normal.y)<.9?cross(normal,vec3(0,1,0)):cross(normal,vec3(1,0,0)));
-            vec3 bitangent=cross(normal,tangent);vec3 incoming=vec3(0);
+            vec3 incoming=vec3(0);
             for(int bounceIndex=0;bounceIndex<4;bounceIndex++) {
-                float seed=dot(floor((pos.xz+Options.zw)*4.0),vec2(17.0,59.0));
-                float a=6.2831853*(float(bounceIndex)+hash(seed))/4.0;
-                float r=sqrt((float(bounceIndex)+.5)/4.0);
-                vec3 bounce=normalize(tangent*cos(a)*r+bitangent*sin(a)*r+normal*sqrt(1.0-r*r));
+                vec3 bounce=marineDiffuseDirection(normal,bounceIndex);
                 Hit secondary=trace(pos+normal*.025,bounce,12.0);
                 if(secondary.found) {
-                    Triangle other=triangles[secondary.primitive];vec3 color=pow(max(surface(other,secondary.bary).rgb,vec3(0)),vec3(2.2));
+                    Triangle other=triangles[secondary.primitive];vec3 color=pow(max(triangleSurface(other,secondary.bary).rgb,vec3(0)),vec3(2.2));
                     incoming+=color*(other.uv2.w*.45+.06*(Options.x/.45));
                 } else incoming+=vec3(.10,.15,.22)*(Options.x/.45);
             }
