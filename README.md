@@ -1,5 +1,7 @@
 # GreenMarine
 
+[![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/AMFGEJ7JAG)
+
 A shader and rendering platform mod for Minecraft **26.3** (Fabric), built on
 Minecraft's own Vulkan renderer. It ships its own shaderpacks, including
 **Solstice RT** with real hardware ray-traced shadows, reflections and global
@@ -59,6 +61,10 @@ cd engine && cargo test && cargo build --release
 
 Needs Java 25, Rust and `glslangValidator`. Android builds and GPU tests:
 [development](docs/DEVELOPMENT.md).
+
+## Community
+
+Questions, bug reports, screenshots and news about new versions go on the [Discord server](https://discord.gg/AMFGEJ7JAG).
 
 ## License
 
