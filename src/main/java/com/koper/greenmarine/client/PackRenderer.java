@@ -123,7 +123,7 @@ public final class PackRenderer {
             if (lightmap == null) lightmap = new TextureTarget("GreenMarine pack lightmap",16,16,GpuFormat.RGBA8_UNORM,null);
             var encoder = RenderSystem.getDevice().createCommandEncoder();
             draw(encoder, selected.get().fragment(),lightmap.getColorTextureView(),vanilla,vanilla,vanilla,vanilla,16,16,IDENTITY);
-            encoder.submit(); ShaderRuntime.submitted(selected.get()); lightmapReady = true; lightmapTick = ShaderRuntime.script().ticks();
+            ShaderRuntime.submitted(selected.get()); lightmapReady = true; lightmapTick = ShaderRuntime.script().ticks();
         } catch (RuntimeException | LinkageError error) { fail(error); }
     }
 
@@ -193,7 +193,8 @@ public final class PackRenderer {
                 pixels += (long)main.width * main.height;
             }
             if (gpuTimer!=null) gpuTimer.end(encoder,measurement);
-            encoder.submit();
+            // No submit here: blaze3d's submit() waits for the submission two back, so a mid-frame submit
+            // made the CPU wait for this frame's own GPU work instead of overlapping with it.
             for(var submission:historySubmissions) submission.history().submitted(historyCamera,submission.normals());
             for(var pass:schedule) ShaderRuntime.submitted(pass.resolved()); sceneFrames++; submissionNanos += System.nanoTime() - started; shadedPixels += pixels;
             if(sceneFrames>40) CPU.add((System.nanoTime()-started)/1_000_000.0);
@@ -261,6 +262,7 @@ public final class PackRenderer {
                 pass.setUniform("RaySurfaceFrame",surfaceRayData);
                 pass.setUniform("RaySurfaceLighting",com.koper.greenmarine.client.rt.RayWorld.surfaceLighting(),RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
                 pass.setUniform("RayReflection",com.koper.greenmarine.client.rt.RayWorld.reflections(),RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
+                pass.setUniform("RaySurfaceExtra",com.koper.greenmarine.client.rt.RayWorld.surfaceExtra(),RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
                 pass.setUniform("RayFrame",rayData);
                 pass.setUniform("RayLighting",com.koper.greenmarine.client.rt.RayWorld.lighting(),RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
                 pass.setUniform("RayNormalDepth",com.koper.greenmarine.client.rt.RayWorld.normals(),RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
@@ -308,7 +310,7 @@ public final class PackRenderer {
                 .withUniform("MarineSurfaceFrame",UniformType.UNIFORM_BUFFER)
                 .withUniform("MarineSurfaceNormalDepth",UniformType.COMBINED_IMAGE_SAMPLER).withUniform("MarineSurfaceAlbedo",UniformType.COMBINED_IMAGE_SAMPLER)
                 .withUniform("RaySurfaceFrame",UniformType.UNIFORM_BUFFER).withUniform("RaySurfaceLighting",UniformType.COMBINED_IMAGE_SAMPLER)
-                .withUniform("RayReflection",UniformType.COMBINED_IMAGE_SAMPLER);
+                .withUniform("RayReflection",UniformType.COMBINED_IMAGE_SAMPLER).withUniform("RaySurfaceExtra",UniformType.COMBINED_IMAGE_SAMPLER);
         if(history) layout.withUniform("MarineHistoryFrame",UniformType.UNIFORM_BUFFER)
             .withUniform("HistorySampler",UniformType.COMBINED_IMAGE_SAMPLER).withUniform("HistoryNormalDepth",UniformType.COMBINED_IMAGE_SAMPLER);
         if(lightingHistory) layout.withUniform("HistoryAlbedoMaterial",UniformType.COMBINED_IMAGE_SAMPLER)

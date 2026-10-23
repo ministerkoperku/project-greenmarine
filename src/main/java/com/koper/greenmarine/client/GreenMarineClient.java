@@ -49,7 +49,7 @@ public final class GreenMarineClient implements ClientModInitializer {
         if (client.level != null && !client.isPaused()) ticks++;
         if (!client.isPaused()) ShaderRuntime.tick(client);
         if (!client.isPaused()) com.koper.greenmarine.client.rt.RayWorld.tick(client);
-        if (!client.isPaused()) VoxelWorld.tick(client);
+        if (!client.isPaused()) {VoxelWorld.tick(client);com.koper.greenmarine.client.world.WorldPrograms.tickHeightField(client);}
         boolean pressed = InputConstants.isKeyDown(InputConstants.KEY_F8);
         if (pressed && !toggleHeld && client.gui.screen() == null) {
             toggleEffect();

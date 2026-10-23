@@ -4,13 +4,14 @@
 #include <greenmarine:reflection_policy.glsl>
 #include <greenmarine:rays.glsl>
 #include <greenmarine:surface_rays.glsl>
+#include <greenmarine:surface_extra.glsl>
 float solRayCoverage(vec3 position) {
     vec3 edge=min(position-RayBoundsMin.xyz,RayBoundsMax.xyz-position);
     return smoothstep(0.0,8.0,min(edge.x,min(edge.y,edge.z)));
 }
 // Match each reduced ray texel to the full-resolution capture texel that produced it.
-bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec4 lighting,out vec4 reflection,out float support) {
-    lighting=vec4(0);reflection=vec4(0);support=0.0;
+bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec4 lighting,out vec4 reflection,out float support,out float occlusion) {
+    lighting=vec4(0);reflection=vec4(0);support=0.0;occlusion=1.0;float occlusionSum=0.0;
     if(!marineSurfaceRayReady()) return false;
     ivec2 outputSize=textureSize(RayReflection,0),captureSize=textureSize(MarineSurfaceNormalDepth,0);
     ivec2 first=ivec2(marineReflectionBase(uv.x,outputSize.x,captureSize.x),marineReflectionBase(uv.y,outputSize.y,captureSize.y));
@@ -44,7 +45,10 @@ bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec
         if(!marineReflectionFootprintMatches(dot(delta,surface.xyz),length(delta),eyeDistance,float(min(captureSize.x,captureSize.y)),incidence)) continue;
         if(needLighting) {
             // Roughness broadens reflections only; preserve the original lighting footprint.
-            if(lightWeight>0.0) lighting+=texelFetch(RaySurfaceLighting,texel,0)*lightWeight;
+            if(lightWeight>0.0) {
+                lighting+=texelFetch(RaySurfaceLighting,texel,0)*lightWeight;
+                occlusionSum+=marineSurfaceOcclusion(texelFetch(RaySurfaceExtra,texel,0))*lightWeight;
+            }
             lightingTotal+=lightWeight;
         }
         if(needReflection) {
@@ -54,11 +58,15 @@ bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec
         total+=weight;
     }
     if(total<.00001 || (needLighting && lightingTotal<.00001)) return false;
-    if(needLighting) lighting/=lightingTotal;
+    if(needLighting) {lighting/=lightingTotal;occlusion=occlusionSum/lightingTotal;}
     support=marineSampleCoverage(total,footprint);
     if(needLighting) support=min(support,marineSampleCoverage(lightingTotal,lightingFootprint));
     reflection=vec4(reflectedSum.a>.00001?reflectedSum.rgb/reflectedSum.a:vec3(0),reflectedSum.a/total);
     return true;
+}
+bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec4 lighting,out vec4 reflection,out float support) {
+    float occlusion;
+    return solSurfaceRays(uv,surface,material,needLighting,lighting,reflection,support,occlusion);
 }
 // Preserve the original include API; legacy callers receive faded hit validity.
 bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec4 lighting,out vec4 reflection) {

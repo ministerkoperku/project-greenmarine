@@ -84,7 +84,6 @@ public final class GreenPostEffect {
             }
             encoder.copyTextureToTexture(scratch.getColorTexture(), main.getColorTexture(), 0, 0, 0, 0, 0, main.width, main.height);
             if(profiling && gpuTimer!=null) gpuTimer.end(encoder,measurement);
-            encoder.submit();
             frames++; if(frames>40) CPU.add((System.nanoTime()-started)/1_000_000.0);
             if (!logged) {
                 logged = true;

@@ -1,7 +1,7 @@
 package com.koper.greenmarine.client.rt;
 
 import com.mojang.blaze3d.vertex.PoseStack;
-import net.minecraft.client.renderer.entity.state.AvatarRenderState;
+import net.minecraft.client.renderer.entity.state.LivingEntityRenderState;
 import net.minecraft.world.entity.Pose;
 import net.minecraft.world.phys.Vec3;
 import java.util.function.Consumer;
@@ -9,7 +9,7 @@ import java.util.function.Consumer;
 /** Exact Minecraft 26.3 EntityRenderDispatcher/LivingEntityRenderer root order. */
 final class PlayerReflectionPose {
     private PlayerReflectionPose() {}
-    static PoseStack root(AvatarRenderState state,int originX,int originY,int originZ,Vec3 offset,
+    static PoseStack root(LivingEntityRenderState state,int originX,int originY,int originZ,Vec3 offset,
                           Consumer<PoseStack> rotations,Consumer<PoseStack> rendererScale) {
         var pose=new PoseStack();
         // Subtract in double precision before PoseStack converts to float coordinates.

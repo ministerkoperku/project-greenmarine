@@ -180,6 +180,7 @@ pub struct RayState {
     surface: Option<SurfaceState>,
     // Surface-RT external instances for the next recording; flights hold their own copy.
     external_frame: Vec<ExternalInstance>,
+    surface_lights: Vec<f32>,
     external_tlas: Option<ExternalTlas>,
     external_built: Vec<Arc<ExternalMesh>>,
 }
@@ -240,6 +241,7 @@ impl RayState {
             atlas: 0,
             surface: None,
             external_frame: Vec::new(),
+            surface_lights: vec![0.0; SURFACE_LIGHT_FLOATS],
             external_tlas: None,
             external_built: Vec::new(),
         };
@@ -689,18 +691,34 @@ fn validate_actor_payload(data: &[f32], max_actors: usize, floats: usize) -> Res
 
 pub struct SurfaceOutputLayout {
     pub reflection_offset: u64,
+    /// Ambient occlusion and volumetric sun scattering (RGBA16F, optional image).
+    pub extra_offset: u64,
     pub bytes: u64,
 }
 pub fn surface_output_layout(width: u32, height: u32) -> Result<SurfaceOutputLayout, String> {
     output_bytes(width, height)?;
     let image_bytes = width as u64 * height as u64 * 8;
-    let reflection_offset = image_bytes.div_ceil(16) * 16;
+    let slot = image_bytes.div_ceil(16) * 16;
     Ok(SurfaceOutputLayout {
-        reflection_offset,
-        bytes: reflection_offset + image_bytes,
+        reflection_offset: slot,
+        extra_offset: slot * 2,
+        bytes: slot * 2 + image_bytes,
     })
 }
-pub fn surface_descriptor_types() -> [vk::DescriptorType; 10] {
+/// Block/dynamic light sources traced for shadowed block light: a uvec4 header (count) then
+/// per light vec4(scene-relative centre, light level 0..15) and vec4(linear colour, unused).
+pub const MAX_SURFACE_LIGHTS: usize = 32;
+pub const SURFACE_LIGHT_FLOATS: usize = 4 + MAX_SURFACE_LIGHTS * 8;
+pub fn surface_lights_payload(lights: &[f32], count: usize) -> Result<Vec<f32>, String> {
+    if count > MAX_SURFACE_LIGHTS || lights.len() < count * 8 || lights[..count * 8].iter().any(|v| !v.is_finite()) {
+        return Err("Invalid surface light list".into());
+    }
+    let mut payload = vec![0.0f32; SURFACE_LIGHT_FLOATS];
+    payload[0] = f32::from_bits(count as u32);
+    payload[4..4 + count * 8].copy_from_slice(&lights[..count * 8]);
+    Ok(payload)
+}
+pub fn surface_descriptor_types() -> [vk::DescriptorType; 11] {
     use vk::DescriptorType as D;
     [
         D::ACCELERATION_STRUCTURE_KHR,
@@ -712,6 +730,7 @@ pub fn surface_descriptor_types() -> [vk::DescriptorType; 10] {
         D::COMBINED_IMAGE_SAMPLER,
         D::STORAGE_BUFFER,
         D::COMBINED_IMAGE_SAMPLER,
+        D::STORAGE_BUFFER,
         D::STORAGE_BUFFER,
     ]
 }
@@ -730,6 +749,7 @@ struct SurfaceState {
     output: Option<Buffer>,
     actors: Option<Buffer>,
     external_table: Option<Buffer>,
+    lights: Option<Buffer>,
     skin: u64,
     views: [u64; 3],
     scene_handle: u64,
@@ -743,6 +763,7 @@ impl Drop for SurfaceState {
             self.output.take();
             self.actors.take();
             self.external_table.take();
+            self.lights.take();
             self.uniform.take();
             if self.owner.is_none() && self.pipeline != vk::Pipeline::null() {
                 self.device.destroy_pipeline(self.pipeline, None);
@@ -781,6 +802,7 @@ impl SurfaceState {
             output: None,
             actors: None,
             external_table: None,
+            lights: None,
             skin: 0,
             views: [0; 3],
             scene_handle: 0,
@@ -813,7 +835,7 @@ impl SurfaceState {
             },
             vk::DescriptorPoolSize {
                 ty: types[1],
-                descriptor_count: 4,
+                descriptor_count: 5,
             },
             vk::DescriptorPoolSize {
                 ty: types[3],
@@ -927,6 +949,15 @@ impl SurfaceState {
         )?;
         self.bind_buffer(9, &table, vk::DescriptorType::STORAGE_BUFFER);
         self.external_table = Some(table);
+        let lights = Buffer::new(
+            &self.device,
+            &self.memory,
+            (SURFACE_LIGHT_FLOATS * 4) as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            false,
+        )?;
+        self.bind_buffer(10, &lights, vk::DescriptorType::STORAGE_BUFFER);
+        self.lights = Some(lights);
         Ok(())
     }
     unsafe fn bind_buffer(&self, binding: u32, buffer: &Buffer, ty: vk::DescriptorType) {
@@ -946,6 +977,11 @@ impl SurfaceState {
 }
 
 impl RayState {
+    /// Lights for the next surface recordings; count 0 clears.
+    pub fn set_surface_lights(&mut self, lights: &[f32], count: usize) -> Result<(), String> {
+        self.surface_lights = surface_lights_payload(lights, count)?;
+        Ok(())
+    }
     pub unsafe fn init_surface(&mut self) -> Result<(), String> {
         if self.surface.is_none() {
             self.surface = Some(SurfaceState::new(&self.device, self.memory)?);
@@ -958,7 +994,7 @@ impl RayState {
         frame: &[f32],
         width: u32,
         height: u32,
-        images: [vk::Image; 2],
+        images: [vk::Image; 3],
         views: [u64; 3],
     ) -> Result<(), String> {
         self.record_surface_actors(
@@ -979,7 +1015,7 @@ impl RayState {
         frame: &[f32],
         width: u32,
         height: u32,
-        images: [vk::Image; 2],
+        images: [vk::Image; 3],
         views: [u64; 3],
         actors: &[f32],
         skin: u64,
@@ -996,7 +1032,7 @@ impl RayState {
         frame: &[f32],
         width: u32,
         height: u32,
-        images: [vk::Image; 2],
+        images: [vk::Image; 3],
         views: [u64; 3],
         actors: &[f32],
         skin: u64,
@@ -1015,6 +1051,7 @@ impl RayState {
                     .is_some_and(|s| !s.built.load(Ordering::Acquire));
                 // The lease keeps these meshes alive until its fence completes.
                 slot.state.external_frame = self.external_frame.clone();
+                slot.state.surface_lights = self.surface_lights.clone();
                 let result = slot.state.record_surface_actors_extended(
                     command, frame, width, height, images, views, actors, skin,
                 );
@@ -1044,11 +1081,13 @@ impl RayState {
         let (tlas, table) = self
             .prepare_external(command, &scene)?
             .unwrap_or_else(|| (scene.tlas.handle, vec![0; 4]));
+        let lights = self.surface_lights.clone();
         self.surface.as_mut().unwrap().record(
             command,
             &scene,
             tlas,
             &table,
+            &lights,
             frame,
             width,
             height,
@@ -1082,14 +1121,18 @@ impl SurfaceState {
         scene: &Scene,
         tlas: vk::AccelerationStructureKHR,
         table: &[u32],
+        lights: &[f32],
         frame: &[f32],
         width: u32,
         height: u32,
-        images: [vk::Image; 2],
+        images: [vk::Image; 3],
         views: [u64; 3],
         actors: &[f32],
         skin: u64,
     ) -> Result<(), String> {
+        if lights.len() != SURFACE_LIGHT_FLOATS {
+            return Err("Invalid surface light payload".into());
+        }
         if table.len() < 4
             || !table.len().is_multiple_of(4)
             || table.len() as u64 * 4 > EXTERNAL_TABLE_BYTES
@@ -1097,8 +1140,11 @@ impl SurfaceState {
             return Err("Invalid external geometry table".into());
         }
         if command == vk::CommandBuffer::null()
-            || images.contains(&vk::Image::null())
+            || images[0] == vk::Image::null()
+            || images[1] == vk::Image::null()
             || images[0] == images[1]
+            || images[2] == images[0]
+            || images[2] == images[1]
             || views.contains(&0)
         {
             return Err("Invalid borrowed surface RT handles".into());
@@ -1198,6 +1244,12 @@ impl SurfaceState {
         );
         self.device.cmd_update_buffer(
             command,
+            self.lights.as_ref().unwrap().handle,
+            0,
+            std::slice::from_raw_parts(lights.as_ptr() as *const u8, SURFACE_LIGHT_FLOATS * 4),
+        );
+        self.device.cmd_update_buffer(
+            command,
             self.external_table.as_ref().unwrap().handle,
             0,
             std::slice::from_raw_parts(table.as_ptr() as *const u8, table.len() * 4),
@@ -1240,9 +1292,14 @@ impl SurfaceState {
             &[],
             &[],
         );
-        for (i, image) in images.iter().enumerate() {
+        // A null third image is the legacy two-output contract; its slot is still written.
+        let offsets = [0, layout.reflection_offset, layout.extra_offset];
+        for (image, offset) in images.iter().zip(offsets) {
+            if *image == vk::Image::null() {
+                continue;
+            }
             let region = vk::BufferImageCopy::default()
-                .buffer_offset(if i == 0 { 0 } else { layout.reflection_offset })
+                .buffer_offset(offset)
                 .image_subresource(
                     vk::ImageSubresourceLayers::default()
                         .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -1456,7 +1513,7 @@ unsafe fn flight_set(
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: if surface { 4 } else { 2 },
+            descriptor_count: if surface { 5 } else { 2 },
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
@@ -1502,6 +1559,7 @@ impl SurfaceState {
             output: None,
             actors: None,
             external_table: None,
+            lights: None,
             skin: 0,
             views: [0; 3],
             scene_handle: 0,
@@ -1612,6 +1670,7 @@ impl RayState {
             atlas: 0,
             surface: None,
             external_frame: Vec::new(),
+            surface_lights: vec![0.0; SURFACE_LIGHT_FLOATS],
             external_tlas: None,
             external_built: Vec::new(),
         };

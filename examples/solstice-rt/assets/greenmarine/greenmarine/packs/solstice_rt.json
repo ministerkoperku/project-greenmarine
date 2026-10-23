@@ -69,7 +69,7 @@
       "max": 320
     },
     "cloudCoverage": {
-      "default": 0.7,
+      "default": 0.5,
       "min": 0,
       "max": 1.5
     },
@@ -118,15 +118,15 @@
       "min": 0,
       "max": 1
     },
-    "waveDiagnostic": {
+    "weather": {
       "default": 0,
       "min": 0,
-      "max": 1
+      "max": 4
     },
     "surfaceDiagnostic": {
       "default": 0,
       "min": 0,
-      "max": 2
+      "max": 9
     },
     "skyBrightness": {
       "default": 1,
@@ -142,6 +142,26 @@
       "default": 0.65,
       "min": 0,
       "max": 1
+    },
+    "volumetric": {
+      "default": 1,
+      "min": 0,
+      "max": 3
+    },
+    "occlusion": {
+      "default": 1,
+      "min": 0,
+      "max": 1
+    },
+    "specular": {
+      "default": 1,
+      "min": 0,
+      "max": 3
+    },
+    "relief": {
+      "default": 1,
+      "min": 0,
+      "max": 2
     }
   },
   "passes": [

@@ -351,7 +351,7 @@ unsafe fn readback_actors(
     for image in outputs {
         image.clear(host.command, [-3.0; 4]);
     }
-    let images = [outputs[0].handle, outputs[1].handle];
+    let images = [outputs[0].handle, outputs[1].handle, vk::Image::null()];
     match actors {
         Some((payload, skin)) => ray.record_surface_actors(
             host.command,
@@ -865,7 +865,7 @@ fn surface_gpu_offscreen_reflection_shadow_odd_dimensions_and_scene_reset() {
                 &frame,
                 width,
                 height,
-                [outputs[0].handle, outputs[1].handle],
+                [outputs[0].handle, outputs[1].handle, vk::Image::null()],
                 views
             )
             .is_err(),
@@ -986,7 +986,7 @@ unsafe fn queued_flight(
         frame,
         width,
         height,
-        [outputs[0].handle, outputs[1].handle],
+        [outputs[0].handle, outputs[1].handle, vk::Image::null()],
         views,
     )
     .unwrap();
@@ -1781,7 +1781,7 @@ fn surface_gpu_external_meshes_reflect_shadow_move_and_survive_flights() {
             &frame,
             width,
             height,
-            [outputs[0].handle, outputs[1].handle],
+            [outputs[0].handle, outputs[1].handle, vk::Image::null()],
             views,
         )
         .unwrap();

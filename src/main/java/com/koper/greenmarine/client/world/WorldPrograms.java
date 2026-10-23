@@ -31,15 +31,19 @@ public final class WorldPrograms {
     private static final OpaqueScene OPAQUE=new OpaqueScene();
     private static final SurfaceScene MATERIALS=new SurfaceScene();
     private static final BackgroundSky BACKGROUND=new BackgroundSky();
+    private static final DistantTerrain DISTANT=new DistantTerrain();
+    private static final HeightField HEIGHTS=new HeightField();
+    private static final PbrAtlas PBR=new PbrAtlas();
     private static final Map<String,CompiledRenderPipeline> CAPTURE_VARIANTS=new HashMap<>();
     private static final WeatherMemory WEATHER=new WeatherMemory();
     private static final ByteBuffer ENVIRONMENT=ByteBuffer.allocateDirect(128).order(ByteOrder.nativeOrder());
     private static final ByteBuffer FRAME=ByteBuffer.allocateDirect(MarineFrame.BYTES).order(ByteOrder.nativeOrder());
     private static final ByteBuffer SURFACE=ByteBuffer.allocateDirect(SURFACE_BYTES).order(ByteOrder.nativeOrder());
     private static GpuBuffer frame,surface,surfaceOpaque,environment,ray,voxel,surfaceRay,materialProfiles,materialExtension;
-    private static com.mojang.renderpearl.api.textures.GpuTextureView voxelMaterials;
+    private static com.mojang.renderpearl.api.textures.GpuTextureView voxelMaterials,heightField,pbrSpecular,pbrNormal;
     private static boolean prepared,failed,pendingDraw,logged,captureMode,captureWater,surfaceReady,captureUnsupported;
-    private static boolean earlyMaterials;
+    private static boolean earlyMaterials,backgroundDrawn;
+    private static final boolean DISTANT_HORIZONS=net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("distanthorizons");
     private static long draws,captures,bindingEpoch,bindingUpdates,bindingSkips;
     private static GpuTimer mainGpu;
     private static int mainMeasurement=-1;
@@ -56,6 +60,7 @@ public final class WorldPrograms {
     public static PerformanceSamples.Snapshot copyCpu() {return COPY_CPU.snapshot();}
     public static PerformanceSamples.Snapshot mainGpu() {return mainGpu==null?new PerformanceSamples.Snapshot(0,0,0,0,0):mainGpu.snapshot();}
     public static void beginMain() {
+        backgroundDrawn=false;
         mainMeasurement=-1;
         if(!ShaderRuntime.settings().profiling()) {if(mainGpu!=null)mainGpu.close();mainGpu=null;return;}
         if(mainGpu==null) {
@@ -106,13 +111,26 @@ public final class WorldPrograms {
                 ShaderRuntime.settings().quality(),ShaderRuntime.rays().effective(),projection,camera.viewRotationMatrix,ShaderRuntime.script());
             FRAME.position(0).limit(MarineFrame.BYTES);encoder.writeToBuffer(frame.slice(),FRAME);
             SURFACE.position(0).limit(SURFACE_BYTES);encoder.writeToBuffer(surface.slice(),SURFACE);encoder.writeToBuffer(surfaceOpaque.slice(),SURFACE.rewind());ray=RayWorld.bindings(encoder);
-            voxel=VoxelWorld.prepare(encoder,camera.pos.x,camera.pos.y,camera.pos.z,ShaderRuntime.rays().effective()==RayMode.VOXEL);voxelMaterials=VoxelWorld.materials(encoder);
+            voxel=VoxelWorld.prepare(encoder,camera.pos.x,camera.pos.y,camera.pos.z,ShaderRuntime.rays().effective()==RayMode.VOXEL);voxelMaterials=VoxelWorld.materials(encoder);heightField=HEIGHTS.bind(encoder);pbrSpecular=PBR.specular(encoder);pbrNormal=PBR.normal(encoder);
             prepared=true;
         } catch(RuntimeException|LinkageError error) {fail(error);}
     }
     private static float wrapped(double value) {return (float)(value-java.lang.Math.floor(value/4096)*4096);}
     private static float parameter(String name,float fallback) {var pack=ShaderRuntime.active();var script=ShaderRuntime.script();return pack!=null && script!=null && pack.definition().parameters().stream().anyMatch(p->p.name().equals(name))?script.value(name):fallback;}
+    /** Before the scene passes: Solstice lighting for Distant Horizons LODs (no-op without DH). */
+    public static void renderDistant(GameRenderer renderer) {
+        boolean active=DistantTerrain.LOADED && enabled() && DistantTerrain.shades(ShaderRuntime.active());
+        DistantTerrain.override(active);
+        if(!active || !renderer.gameRenderState().shouldRenderLevel)return;
+        try {DISTANT.render(renderer.mainRenderTarget(),RenderSystem.getDevice().createCommandEncoder(),ShaderRuntime.active(),frame,surface,environment,renderer.levelLightmap(),heightField);}
+        catch(RuntimeException|LinkageError error) {fail(error);}
+    }
     public static void finishWorld() {prepared=false;}
+    /** Column heights for sun shadows beyond the traced scene; only while a Solstice terrain program is active. */
+    public static void tickHeightField(net.minecraft.client.Minecraft client) {
+        // Not enabled(): that also requires a frame in preparation, which is never true during a client tick.
+        if(!failed && GreenMarineClient.enabled() && ShaderRuntime.active()!=null && DistantTerrain.shades(ShaderRuntime.active()))HEIGHTS.tick(client);
+    }
     public static CompiledRenderPipeline select(CompiledRenderPipeline original) {
         if(!enabled() || !(original instanceof FrontendRenderPipeline front) || OWNED.contains(original))return original;
         var variants=captureMode?CAPTURE_VARIANTS:VARIANTS;var cached=variants.get(front.name());if(cached!=null)return cached;
@@ -173,10 +191,10 @@ public final class WorldPrograms {
         pass.setUniform("MarineMaterialFrame",materialProfiles);pass.setUniform("MarineMaterialExtension",materialExtension);
         var linear=RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);var nearest=RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
         pass.setUniform("MarineOpaqueColor",OPAQUE.color(),linear);pass.setUniform("MarineOpaqueDepth",OPAQUE.depth(),nearest);
-        pass.setUniform("RayLighting",RayWorld.lighting(),linear);pass.setUniform("RayNormalDepth",RayWorld.normals(),nearest);pass.setUniform("RayAlbedo",RayWorld.albedo(),linear);pass.setUniform("VoxelMaterials",voxelMaterials,nearest);
+        pass.setUniform("RayLighting",RayWorld.lighting(),linear);pass.setUniform("RayNormalDepth",RayWorld.normals(),nearest);pass.setUniform("RayAlbedo",RayWorld.albedo(),linear);pass.setUniform("VoxelMaterials",voxelMaterials,nearest);pass.setUniform("MarineHeightField",heightField,nearest);pass.setUniform("MarinePbrSpecular",pbrSpecular,nearest);pass.setUniform("MarinePbrNormal",pbrNormal,nearest);
         pass.setUniform("MarineSurfaceNormalDepth",!captureMode && surfaceReady?MATERIALS.normal():RayWorld.normals(),nearest);
         pass.setUniform("MarineSurfaceAlbedo",!captureMode && surfaceReady?MATERIALS.albedo():RayWorld.albedo(),nearest);
-        pass.setUniform("RaySurfaceLighting",RayWorld.surfaceLighting(),linear);pass.setUniform("RayReflection",RayWorld.reflections(),linear);
+        pass.setUniform("RaySurfaceLighting",RayWorld.surfaceLighting(),linear);pass.setUniform("RayReflection",RayWorld.reflections(),linear);pass.setUniform("RaySurfaceExtra",RayWorld.surfaceExtra(),linear);
     }
     public static void drawn(CompiledRenderPipeline pipeline) {if(!captureMode && enabled() && OWNED.contains(pipeline)) {draws++;pendingDraw=true;}}
     public static void submitted() {
@@ -186,14 +204,26 @@ public final class WorldPrograms {
     public static void captureOpaque(RenderTarget main) {
         if(!enabled())return;long started=System.nanoTime();
         try {var encoder=RenderSystem.getDevice().createCommandEncoder();
-            var pack=ShaderRuntime.active();
-            var background=pack.definition().programs().stream().filter(program->program.target()==PackProgram.Target.BACKGROUND).findFirst();
-            if(background.isPresent()) {
-                BACKGROUND.render(main,encoder,pack,background.get(),frame,surface,environment);draws++;pendingDraw=true;
-            }
+            if(!backgroundDrawn)drawBackground(main,encoder);
             OPAQUE.capture(main,encoder);
             SURFACE.putFloat(0,1);SURFACE.position(0).limit(SURFACE_BYTES);encoder.writeToBuffer(surface.slice(),SURFACE);captures++;COPY_CPU.add((System.nanoTime()-started)/1e6);
         } catch(RuntimeException|LinkageError error) {fail(error);}
+    }
+    private static void drawBackground(RenderTarget main,CommandEncoder encoder) {
+        var pack=ShaderRuntime.active();backgroundDrawn=true;
+        var background=pack.definition().programs().stream().filter(program->program.target()==PackProgram.Target.BACKGROUND).findFirst();
+        if(background.isPresent()) {
+            BACKGROUND.render(main,encoder,pack,background.get(),frame,surface,environment);draws++;pendingDraw=true;
+        }
+    }
+    /**
+     * Distant Horizons applies its LOD colour before solid terrain without writing host depth, so the
+     * depth-equal-far background would paint over every LOD. With DH present the sky goes first instead.
+     */
+    public static void backgroundBeforeDistantTerrain(RenderTarget main) {
+        if(!DISTANT_HORIZONS || !enabled() || backgroundDrawn)return;
+        try {drawBackground(main,RenderSystem.getDevice().createCommandEncoder());}
+        catch(RuntimeException|LinkageError error) {fail(error);}
     }
     private static PackProgram surfaceProgram() {
         return ShaderRuntime.active()==null?null:ShaderRuntime.active().definition().programs().stream().filter(p->p.surface()!=null).findFirst().orElse(null);
@@ -260,6 +290,7 @@ public final class WorldPrograms {
             for(int i=0;i<SURFACE_BYTES;i+=4) SURFACE.putFloat(i,0);
             var sky=renderer.gameRenderState().levelRenderState.skyRenderState;
             SURFACE.putFloat(4,1-sky.rainBrightness);
+            SURFACE.putFloat(8,RayWorld.surfaceLightsActive()?1:0);
             SURFACE.putFloat(16,wrapped(camera.pos.x)).putFloat(20,wrapped(camera.pos.y)).putFloat(24,wrapped(camera.pos.z));
             var sun=RaySun.sample(sky.sunAngle,sky.rainBrightness,sky.skybox==net.minecraft.world.level.dimension.DimensionType.Skybox.OVERWORLD,parameter("sunStrength",1));
             sun.get(32,SURFACE);
@@ -298,7 +329,7 @@ public final class WorldPrograms {
     private static void fail(Throwable error) {failed=true;prepared=false;pendingDraw=false;ShaderRuntime.renderFailure(error);GreenMarine.LOGGER.error("World shader programs disabled until pack switch/reload",error);}
     public static void reset() {
         bindingEpoch++;bindingUpdates=bindingSkips=0;
-        BACKGROUND.close();
+        BACKGROUND.close();DISTANT.close();HEIGHTS.close();HEIGHTS.reset();PBR.close();
         prepared=failed=pendingDraw=logged=captureMode=captureWater=surfaceReady=captureUnsupported=false;WEATHER.reset();if(mainGpu!=null)mainGpu.close();mainGpu=null;mainFrames=0;mainMeasurement=-1;VARIANTS.values().forEach(CompiledRenderPipeline::close);VARIANTS.clear();CAPTURE_VARIANTS.values().forEach(CompiledRenderPipeline::close);CAPTURE_VARIANTS.clear();OWNED.clear();OPAQUE.close();MATERIALS.close();
         if(frame!=null)frame.close();if(surface!=null)surface.close();if(surfaceOpaque!=null)surfaceOpaque.close();if(environment!=null)environment.close();if(materialProfiles!=null)materialProfiles.close();if(materialExtension!=null)materialExtension.close();materialProfiles=materialExtension=null;frame=surface=surfaceOpaque=environment=ray=voxel=surfaceRay=null;voxelMaterials=null;draws=captures=0;COPY_CPU.clear();
     }

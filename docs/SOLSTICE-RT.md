@@ -42,6 +42,18 @@ Entities, block entities, particles, rain, hand and GUI keep their host shaders.
 - **Diffuse GI** uses four fixed cosine-distributed directions around the normal.
   The directions do not depend on position, so lighting is stable while the camera
   moves. Strength is `giStrength`.
+- **Ambient occlusion.** The four GI rays also measure local occlusion: a hit closer
+  than six blocks darkens sky ambient and, at 60 %, block light. Strength is
+  `occlusion`.
+- **Volumetric sunlight.** The native pass marches each reduced camera ray to the
+  captured surface (at most 48 blocks, the scene region) with one sun shadow ray per
+  step: 4, 6, 8 or 12 steps from Low to Ultra, none when `volumetric` is 0. The scene
+  pass filters the sunlit fraction over 3x3 reduced texels and adds forward-scattered
+  sunlight, so canopies, walls and cave mouths cast visible shafts.
+- **Sun highlight and relief.** Every surface receives a GGX sun highlight masked by
+  the traced sun visibility (`specular`). `relief` turns atlas luminance into a height
+  field inside 16-texel tiles and tilts the shading normal; it fades once a texel is
+  smaller than a pixel. Both are procedural, not resource pack material maps.
 - **Fallback shadows.** Without hardware RT, the terrain program can trace one sun
   ray through a local 32x32x32 voxel snapshot (Voxel mode, or Auto/Hardware at
   High/Ultra when hardware is unavailable). Full opaque cells occlude; slabs,
@@ -92,7 +104,7 @@ rebuilds the RT targets.
 
 ## Controls
 
-28 parameters, in declaration order, update uniforms without rebuilding pipelines.
+32 parameters, in declaration order, update uniforms without rebuilding pipelines.
 The pack's Reset button restores defaults.
 
 | Controls | Purpose |
@@ -104,7 +116,9 @@ The pack's Reset button restores defaults.
 | `cloudCoverage`, `cloudDetail`, `cloudSpeed` | Procedural clouds |
 | `bloom`, `bloomThreshold` | Highlight bloom |
 | `wetness`, `puddles`, `terrainRoughness`, `snow`, `emission` | Weather response and material accents |
-| `waveDiagnostic`, `surfaceDiagnostic` | Debug views: wave height; capture normals (1) or albedo (2) |
+| `volumetric`, `occlusion`, `specular`, `relief` | Ray-traced sun shafts, traced ambient occlusion, sun highlight on every surface, texture relief |
+| `weather` | Sky mood: 0 auto (each in-game day clear to overcast), 1 clear, 2 hazy, 3 cloudy, 4 overcast |
+| `surfaceDiagnostic` | Debug views: capture normals (1), albedo (2), native ray acceptance (3), traced occlusion (4), sunlit ray fraction (5), raw reflection hits and sun visibility (6) or water wave height (7) |
 
 ## Temporal history
 

@@ -1,6 +1,6 @@
 package com.koper.greenmarine.client.world;
 
-/** Wet surfaces dry gradually, with paused frames leaving weather memory unchanged. */
+/** Wetness builds up over the length of a rain and dries over a few minutes; paused frames leave it unchanged. */
 public final class WeatherMemory {
     private long tick=Long.MIN_VALUE;
     private float wetness;
@@ -10,7 +10,8 @@ public final class WeatherMemory {
         if(tick==Long.MIN_VALUE) {tick=currentTick;wetness=rain;return wetness;}
         if(!paused && currentTick!=tick) {
             long elapsed=Math.clamp(currentTick-tick,0,200);
-            float rate=rain>wetness?.04f:.002f;
+            // ~50 s of rain to soak, half dried after ~90 s, gone after a few minutes.
+            float rate=rain>wetness?.004f:.0004f;
             wetness+=(rain-wetness)*(1-(float)Math.pow(1-rate,elapsed));tick=currentTick;
         }
         return wetness;

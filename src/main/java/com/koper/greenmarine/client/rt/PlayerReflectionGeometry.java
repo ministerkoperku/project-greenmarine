@@ -21,7 +21,14 @@ final class PlayerReflectionGeometry {
             if(capacity!=MAX_BOXES && capacity!=EXTENDED_MAX_BOXES)throw new IllegalArgumentException("Unsupported actor capacity");
             this.capacity=capacity;buffer=ByteBuffer.allocateDirect(16+capacity*BOX_BYTES).order(ByteOrder.nativeOrder());
         }
+        /** Continues an existing payload (e.g. a KAvatar body) so further actors can follow it. */
+        Builder(ByteBuffer existing,int boxes,int capacity) {
+            this(capacity);
+            if(boxes<0 || boxes>capacity || existing.remaining()<16+boxes*BOX_BYTES)throw new IllegalArgumentException("Invalid actor payload");
+            buffer.put(0,existing.duplicate().limit(existing.position()+16+boxes*BOX_BYTES),0,16+boxes*BOX_BYTES);count=boxes;
+        }
         int count() {return count;}
+        int remaining() {return capacity-count;}
         ByteBuffer data() {return buffer.asReadOnlyBuffer().order(ByteOrder.nativeOrder());}
         boolean add(ModelPart.Cube cube,Matrix4fc pose) {
             if(count==capacity || cube.polygons.length!=6 || !pose.isFinite()
@@ -93,6 +100,16 @@ final class PlayerReflectionGeometry {
             if(!Float.isFinite(value) || Math.abs(value-(u?vertex.u():vertex.v()))>1e-4f) return null;
         }
         return row;
+    }
+    /** Appends every visible cube of one model, or none of them when they do not all fit or validate. */
+    static boolean appendWhole(Builder builder,ModelPart root,PoseStack pose) {
+        var cubes=new java.util.ArrayList<ModelPart.Cube>();var poses=new java.util.ArrayList<Matrix4f>();
+        root.visit(pose,(partPose,path,index,cube)->{if(visible(root,path)){cubes.add(cube);poses.add(new Matrix4f(partPose.pose()));}});
+        if(cubes.isEmpty() || cubes.size()>builder.remaining())return false;
+        var trial=new Builder(builder.data(),builder.count(),builder.capacity);
+        for(int i=0;i<cubes.size();i++) if(!trial.add(cubes.get(i),poses.get(i)))return false;
+        for(int i=0;i<cubes.size();i++)builder.add(cubes.get(i),poses.get(i));
+        return true;
     }
     static Builder capture(ModelPart root,PoseStack pose) {
         var builder=new Builder();

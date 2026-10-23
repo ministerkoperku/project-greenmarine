@@ -4,6 +4,34 @@ Updated 2026-10-15 for 0.7.0-prototype. This file preserves the
 owner's next direction across sessions. Read the current source before treating
 any historical report as a new bug.
 
+## Current state 2026-10-23 evening (0.9.7, merged WIP)
+
+The live clone is ~/Projekty/project-greenmarine (the mods-src clone is stale). It now holds the
+22.10 WIP (SurfaceLights, armour/mob reflections, DistantTerrain, GI fixes) plus 23.10 work:
+physical atmosphere + weather moods, puddles/drying, indoor volumetric beams, RT AO, sun specular,
+relief, height-field shadows beyond the RT scene, RT scene re-centred vertically, DH LOD fixes
+(host depth, bob-proof rays), near-camera capture normal fix, metal shading without diffuse.
+Look probe modes (-PlookProbe + lookNear/lookRoom/lookTimes/lookDh/lookTorch/lookMountain/
+lookMetals) drive a dev client and save screenshots; run them in a scratch copy, they edit the world.
+Open: LabPBR maps load correctly on the CPU but the terrain shader reads zeros from the uploaded
+atlas (writeToTexture of a fresh RGBA8 2048^2 texture); not yet found. DH LOD darkening while
+walking was fixed by reasoning (bob in projection), not reproduced; owner to confirm.
+
+## Current 0.9.7 "make it look like RT" delivery (2026-10-23)
+
+Owner: RT is Loaded but does not look like RT (no shafts, no PBR) and FPS must stay
+near 200. Added a third native surface output (`greenmarine_surface_rt_record_extra`,
+`RaySurfaceExtra`): AO from the existing GI rays and a volumetric sun march
+(Viewport.w steps, 4/6/8/12 by quality). Solstice uses it for sun shafts in the
+scene pass and AO on ambient; plus GGX sun highlight on all surfaces and procedural
+texture relief. Params volumetric/occlusion/specular/relief fill the 32-slot budget.
+Look probe (`-PruntimeProbe -PlookProbe`, demo world, 2560x1370, Medium, no Sodium):
+all on ~149 FPS vs all off ~155; surface RT GPU ~0.45 ms vs 0.40 ms. Screenshots in
+run/probe-output/look. Pre-existing on RADV: 4 ignored GPU tests fail identically
+before and after this change (external tint albedo 0.266 vs 0.435 + cascades).
+Installed in niebo-i-haos-dev (0.9.6 backed up); not committed, awaiting owner in game.
+Testbench still runs the fullpack 0.8.2 variant and was not touched.
+
 ## Current 0.9.6 external renderer API (2026-10-22)
 
 Owner will integrate KoperLib Kender on their PC with the newest local koperlib

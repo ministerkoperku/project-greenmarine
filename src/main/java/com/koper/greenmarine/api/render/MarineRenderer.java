@@ -76,7 +76,7 @@ public final class MarineRenderer {
         var camera = renderer.gameRenderState().levelRenderState.cameraRenderState;
         var device = RenderSystem.getDevice(); var client = Minecraft.getInstance();
         var encoder=device.createCommandEncoder();
-        com.koper.greenmarine.client.rt.RayWorld.bindings(encoder);com.koper.greenmarine.client.rt.RayWorld.surfaceBindings(encoder);encoder.submit();
+        com.koper.greenmarine.client.rt.RayWorld.bindings(encoder);com.koper.greenmarine.client.rt.RayWorld.surfaceBindings(encoder);
         for (var entry : entries) {
             if (entry.stage != stage || entry.failed) continue;
             var frame = new FrameContext(Map.of("sceneColor", main.getColorTextureView(), "sceneDepth", main.getDepthTextureView(),

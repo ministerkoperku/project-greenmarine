@@ -13,7 +13,7 @@ public record PackPass(String name, Stage stage, String fragment, String fallbac
         "MarineFrame","ColorSampler","DepthSampler","LightmapSampler","SceneSampler",
         "RayFrame","RayLighting","RayNormalDepth","RayAlbedo","VoxelFrame","VoxelMaterials",
         "MarineEnvironment","MarineSurfaceFrame","MarineSurfaceNormalDepth","MarineSurfaceAlbedo",
-        "MarineOpaqueColor","MarineOpaqueDepth","RaySurfaceFrame","RaySurfaceLighting","RayReflection",
+        "MarineOpaqueColor","MarineOpaqueDepth","RaySurfaceFrame","RaySurfaceLighting","RayReflection","RaySurfaceExtra",
         "MarineHistoryFrame","HistorySampler","HistoryNormalDepth","HistoryAlbedoMaterial","HistorySceneDepth");
     public PackPass(String name,Stage stage,String fragment,String fallback,Requirement requires,Quality minQuality,float scale,String spirv,Format format,boolean history) {
         this(name,stage,fragment,fallback,requires,minQuality,scale,spirv,format,history,Map.of());

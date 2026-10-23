@@ -128,7 +128,7 @@ tasks.register('solsticeShaderpack', Zip) {
         into 'assets/greenmarine/shaders/core'
     }
     from('src/main/resources/assets/greenmarine/shaders/include') {
-        include 'solstice*.glsl', 'environment.glsl', 'surface_rays.glsl', 'history.glsl', 'frame.glsl', 'surface.glsl', 'rays.glsl', 'sky_visibility.glsl', 'materials.glsl', 'voxel.glsl', 'reflection_policy.glsl', 'cloud_noise.glsl', 'output_quality.glsl'
+        include 'solstice*.glsl', 'environment.glsl', 'surface_rays.glsl', 'surface_extra.glsl', 'heightfield.glsl', 'labpbr.glsl', 'history.glsl', 'frame.glsl', 'surface.glsl', 'rays.glsl', 'sky_visibility.glsl', 'materials.glsl', 'voxel.glsl', 'reflection_policy.glsl', 'cloud_noise.glsl', 'output_quality.glsl'
         into 'assets/greenmarine/shaders/include'
     }
 }
@@ -225,8 +225,23 @@ loom {
             if (providers.gradleProperty('namedPassProbe').isPresent()) vmArg '-Dgreenmarine.probe.named_passes=true'
             if (providers.gradleProperty('historyCompatibilityProbe').isPresent()) vmArg '-Dgreenmarine.probe.history_compatibility=true'
             if (providers.gradleProperty('solsticeProbe').isPresent()) vmArg '-Dgreenmarine.probe.solstice=true'
+            if (providers.gradleProperty('lookProbe').isPresent()) vmArg '-Dgreenmarine.probe.look=true'
+            if (providers.gradleProperty('lookNear').isPresent()) vmArg '-Dgreenmarine.probe.look.near=true'
+            if (providers.gradleProperty('lookRoom').isPresent()) vmArg '-Dgreenmarine.probe.look.room=true'
+            if (providers.gradleProperty('lookTimes').isPresent()) vmArg '-Dgreenmarine.probe.look.times=true'
+            if (providers.gradleProperty('lookDh').isPresent()) vmArg '-Dgreenmarine.probe.look.dh=true'
+            if (providers.gradleProperty('lookTorch').isPresent()) vmArg '-Dgreenmarine.probe.look.torch=true'
+            if (providers.gradleProperty('lookMountain').isPresent()) vmArg '-Dgreenmarine.probe.look.mountain=true'
+            if (providers.gradleProperty('lookMetals').isPresent()) vmArg '-Dgreenmarine.probe.look.metals=true'
+            if (providers.gradleProperty('lookTime').isPresent()) vmArg '-Dgreenmarine.probe.look.time=' + providers.gradleProperty('lookTime').get()
+            if (providers.gradleProperty('lookQuality').isPresent()) vmArg '-Dgreenmarine.probe.look.quality=' + providers.gradleProperty('lookQuality').get()
             if (providers.gradleProperty('worldProgramsProbe').isPresent()) vmArg '-Dgreenmarine.probe.world_programs=true'
             if (providers.gradleProperty('hardwareRtProbe').isPresent()) vmArg '-Dgreenmarine.probe.hardware_rt=true'
+            if (providers.gradleProperty('nearReflectionProbe').isPresent()) vmArg '-Dgreenmarine.probe.near_reflection=true'
+            if (providers.gradleProperty('distantProbe').isPresent()) vmArg '-Dgreenmarine.probe.distant=true'
+            if (providers.gradleProperty('mobProbe').isPresent()) vmArg '-Dgreenmarine.probe.mobs=true'
+            if (providers.gradleProperty('torchProbe').isPresent()) vmArg '-Dgreenmarine.probe.torch=true'
+            if (providers.gradleProperty('waterProbe').isPresent()) vmArg '-Dgreenmarine.probe.water=true'
             if (providers.gradleProperty('renderApiProbe').isPresent()) vmArg '-Dgreenmarine.probe.render_api=true'
             if (providers.gradleProperty('voxelProbe').isPresent()) vmArg '-Dgreenmarine.probe.voxel=true'
             if (providers.gradleProperty('worldLightingProbe').isPresent()) vmArg '-Dgreenmarine.probe.world=true'

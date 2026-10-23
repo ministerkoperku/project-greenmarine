@@ -14,4 +14,14 @@ public final class RaySun {
         return new Vector4f(-(float)Math.sin(angle),elevation,0,
             overworld?strength*daylight*Math.clamp(rainBrightness,0,1):0);
     }
+    /** Ray-traced shadow light: the sun by day, the opposing moon at a matching low strength by night. */
+    public static Vector4f shadowLight(float angle,float rainBrightness,boolean overworld,float strength) {
+        float elevation=(float)Math.cos(angle);
+        if(elevation>=0)return sample(angle,rainBrightness,overworld,strength);
+        float night=Math.clamp(-elevation/.15f,0,1);
+        return new Vector4f((float)Math.sin(angle),-elevation,0,
+            overworld?strength*MOONLIGHT*night*Math.clamp(rainBrightness,0,1):0);
+    }
+    /** Solstice moonlight relative to sunlight (solIrradiance). */
+    private static final float MOONLIGHT=.06f;
 }

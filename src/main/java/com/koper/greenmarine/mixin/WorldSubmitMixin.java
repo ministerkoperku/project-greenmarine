@@ -9,5 +9,5 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(FrontendCommandEncoder.class)
 public abstract class WorldSubmitMixin {
     @Inject(method="submit",at=@At("RETURN"))
-    private void greenmarine$submitted(CallbackInfo ci) {WorldPrograms.submitted();}
+    private void greenmarine$submitted(CallbackInfo ci) {com.koper.greenmarine.client.rt.RayWorld.hostSubmitted();WorldPrograms.submitted();}
 }

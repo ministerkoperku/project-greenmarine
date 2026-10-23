@@ -5,6 +5,10 @@
   "client": [
     "ClientLevelAccessor",
     "ClientLevelGeometryMixin",
+    "EntityShadowMixin",
+    "ArmorLayerAccessor",
+    "EquipmentAssetsAccessor",
+    "TextureAtlasAccessor",
     "FrontendGpuDeviceAccessor",
     "VulkanDeviceAccessor",
     "BuiltInPackSourceMixin",

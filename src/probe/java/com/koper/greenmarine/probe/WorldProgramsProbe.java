@@ -118,9 +118,9 @@ public final class WorldProgramsProbe {
                 case 38 -> {if(ticks==1)ShaderRuntime.previewParameter("surfaceDiagnostic",0);if(ticks<30)return;capture(client,output,"underwater.png");stage=39;ticks=0;}
                 case 39 -> {if(!captured.get())return;rainy=flashing=true;select(RayMode.HARDWARE);stage=40;ticks=0;}
                 case 40 -> {if(ticks<100 || !ShaderRuntime.status().loaded())return;capture(client,output,"wet-lightning.png");stage=41;ticks=0;}
-                case 41 -> {if(!captured.get())return;rainy=flashing=false;ShaderRuntime.previewParameter("waveDiagnostic",1);stage=32;ticks=0;}
+                case 41 -> {if(!captured.get())return;rainy=flashing=false;ShaderRuntime.previewParameter("surfaceDiagnostic",7);stage=32;ticks=0;}
                 case 32 -> {if(ticks<30)return;capture(client,output,"water-wave-vertices.png");stage=33;}
-                case 33 -> {if(!captured.get())return;ShaderRuntime.previewParameter("waveDiagnostic",0);night=true;select(RayMode.HARDWARE);stage=20;ticks=0;}
+                case 33 -> {if(!captured.get())return;ShaderRuntime.previewParameter(SOLSTICE?"surfaceDiagnostic":"waveDiagnostic",0);night=true;select(RayMode.HARDWARE);stage=20;ticks=0;}
                 case 20 -> {
                     if(ticks<100 || !ShaderRuntime.status().loaded())return;
                     capture(client,output,"water-night.png");stage=21;

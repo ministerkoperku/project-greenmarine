@@ -23,6 +23,9 @@ public abstract class WorldTransparencyMixin {
     private void greenmarine$begin(CallbackInfo ci) {greenmarine$chunks=null;greenmarine$features=null;WorldPrograms.beginMain();}
     @Inject(method="lambda$addMainPass$0",at=@At("RETURN"))
     private void greenmarine$end(CallbackInfo ci) {WorldPrograms.endMain();}
+    // Before prepareTranslucents, where Distant Horizons draws and applies its LODs.
+    @Inject(method="lambda$addMainPass$0",at=@At(value="INVOKE",target="Lnet/minecraft/client/renderer/LevelRenderer;prepareTranslucents()V"),require=1)
+    private void greenmarine$backgroundBeforeLods(CallbackInfo ci) {WorldPrograms.backgroundBeforeDistantTerrain(targets.main.get());}
     @Inject(method="lambda$addMainPass$0",at=@At(value="INVOKE",target="Lcom/mojang/blaze3d/platform/Lighting;setupFor(Lcom/mojang/blaze3d/platform/Lighting$Entry;)V",shift=At.Shift.AFTER),require=1)
     private void greenmarine$earlyMaterials(GpuBufferSlice fog,boolean oit,ChunkSectionsToRender chunks,FeatureRenderDispatcher.PreparedFrame features,boolean a,boolean b,CallbackInfo ci) {
         WorldPrograms.captureEarlyMaterials(targets.main.get(),fog,chunks,chunkLayerSampler,

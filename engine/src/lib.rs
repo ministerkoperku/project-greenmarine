@@ -263,11 +263,14 @@ mod surface_rt_contract_tests {
     fn surface_outputs_pack_two_half_float_images_without_odd_size_overlap() {
         let layout = crate::rt::surface_output_layout(1, 1).unwrap();
         assert_eq!(layout.reflection_offset, 16);
-        assert_eq!(layout.bytes, 24);
+        assert_eq!(layout.extra_offset, 32);
+        assert_eq!(layout.bytes, 40);
         let layout = crate::rt::surface_output_layout(601, 339).unwrap();
         assert_eq!(layout.reflection_offset % 16, 0);
         assert!(layout.reflection_offset >= 601 * 339 * 8);
-        assert_eq!(layout.bytes, layout.reflection_offset + 601 * 339 * 8);
+        assert_eq!(layout.extra_offset, layout.reflection_offset * 2);
+        assert_eq!(layout.bytes, layout.extra_offset + 601 * 339 * 8);
+        assert!(layout.bytes <= crate::rt::output_bytes(601, 339).unwrap());
         assert!(crate::rt::surface_output_layout(0, 1).is_err());
         assert!(crate::rt::surface_output_layout(u32::MAX, u32::MAX).is_err());
     }
@@ -286,9 +289,22 @@ mod surface_rt_contract_tests {
                     D::COMBINED_IMAGE_SAMPLER,
                     D::STORAGE_BUFFER,
                     D::COMBINED_IMAGE_SAMPLER,
+                    D::STORAGE_BUFFER,
                     D::STORAGE_BUFFER
                 ]
         );
+    }
+    #[test]
+    fn surface_lights_payload_carries_count_and_rejects_invalid_lists() {
+        let lights = [1.0, 2.0, 3.0, 14.0, 1.25, 0.74, 0.32, 0.0];
+        let payload = crate::rt::surface_lights_payload(&lights, 1).unwrap();
+        assert_eq!(payload.len(), crate::rt::SURFACE_LIGHT_FLOATS);
+        assert_eq!(payload[0].to_bits(), 1);
+        assert_eq!(&payload[4..12], &lights);
+        assert!(payload[12..].iter().all(|v| *v == 0.0));
+        assert!(crate::rt::surface_lights_payload(&[f32::NAN; 8], 1).is_err());
+        assert!(crate::rt::surface_lights_payload(&lights, crate::rt::MAX_SURFACE_LIGHTS + 1).is_err());
+        assert_eq!(crate::rt::surface_lights_payload(&[], 0).unwrap()[0].to_bits(), 0);
     }
 }
 
@@ -352,6 +368,7 @@ pub unsafe extern "C" fn greenmarine_surface_rt_record(
                 [
                     vk::Image::from_raw(lighting),
                     vk::Image::from_raw(reflection),
+                    vk::Image::null(),
                 ],
                 [atlas, normal, albedo],
             )
@@ -413,6 +430,7 @@ pub unsafe extern "C" fn greenmarine_surface_rt_record_actors(
                 [
                     vk::Image::from_raw(lighting),
                     vk::Image::from_raw(reflection),
+                    vk::Image::null(),
                 ],
                 [atlas, normal, albedo],
                 payload,
@@ -476,6 +494,78 @@ pub unsafe extern "C" fn greenmarine_surface_rt_record_actors_extended(
                 [
                     vk::Image::from_raw(lighting),
                     vk::Image::from_raw(reflection),
+                    vk::Image::null(),
+                ],
+                [atlas, normal, albedo],
+                payload,
+                skin,
+            )
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn greenmarine_surface_rt_extra_api_version() -> u32 {
+    1
+}
+#[no_mangle]
+/// # Safety
+/// Same contract as `greenmarine_surface_rt_record_actors_extended`, plus a third
+/// distinct RGBA16F TRANSFER_DST output in GENERAL: x = local ambient occlusion,
+/// y = sunlit fraction of the camera ray, z = traced camera ray length in blocks
+/// (zero when no volumetric march ran), w = 1 + frame Camera.w (indoor factor 0..1)
+/// for written texels.
+/// Frame float 71 (Viewport.w) is the volumetric step count; zero disables it.
+pub unsafe extern "C" fn greenmarine_surface_rt_record_extra(
+    command: u64,
+    frame: *const f32,
+    width: u32,
+    height: u32,
+    lighting: u64,
+    reflection: u64,
+    extra: u64,
+    atlas: u64,
+    normal: u64,
+    albedo: u64,
+    actors: *const f32,
+    skin: u64,
+) -> i32 {
+    if command == 0
+        || frame.is_null()
+        || actors.is_null()
+        || lighting == 0
+        || reflection == 0
+        || extra == 0
+        || lighting == reflection
+        || extra == lighting
+        || extra == reflection
+        || atlas == 0
+        || normal == 0
+        || albedo == 0
+    {
+        return -1;
+    }
+    let payload = std::slice::from_raw_parts(actors, rt::EXTENDED_ACTOR_FLOATS);
+    let count = match rt::validate_surface_actors_extended(payload) {
+        Ok(count) => count,
+        Err(_) => return -1,
+    };
+    if count > 0 && skin == 0 {
+        return -1;
+    }
+    ray_result(|context| unsafe {
+        context
+            .ray
+            .as_mut()
+            .ok_or("Parent RT pipeline is unavailable")?
+            .record_surface_actors_extended(
+                vk::CommandBuffer::from_raw(command),
+                std::slice::from_raw_parts(frame, 80),
+                width,
+                height,
+                [
+                    vk::Image::from_raw(lighting),
+                    vk::Image::from_raw(reflection),
+                    vk::Image::from_raw(extra),
                 ],
                 [atlas, normal, albedo],
                 payload,
@@ -492,6 +582,7 @@ mod async_rt_contract_tests {
         assert_eq!(super::greenmarine_rt_api_version(), 1);
         assert_eq!(super::greenmarine_surface_rt_api_version(), 1);
         assert_eq!(super::greenmarine_rt_async_api_version(), 1);
+        assert_eq!(super::greenmarine_surface_rt_extra_api_version(), 1);
         assert_eq!(super::greenmarine_rt_async_begin(0), -1);
         assert_eq!(super::greenmarine_rt_async_begin(1), -2);
         assert_eq!(super::greenmarine_rt_async_submitted(1), -2);
@@ -1093,6 +1184,23 @@ pub unsafe extern "C" fn greenmarine_rt_external_frame(
             .as_mut()
             .ok_or("RT pipeline is unavailable")?
             .set_external_frame(frame)
+    })
+}
+#[no_mangle]
+/// # Safety
+/// Lights references `count * 8` readable aligned floats: per light the scene-relative centre and
+/// light level 0..15, then linear colour and one unused float. Count 0 clears.
+pub unsafe extern "C" fn greenmarine_rt_surface_lights(lights: *const f32, count: u32) -> i32 {
+    if count as usize > rt::MAX_SURFACE_LIGHTS || (count > 0 && lights.is_null()) {
+        return -1;
+    }
+    let data = if count == 0 { &[][..] } else { std::slice::from_raw_parts(lights, count as usize * 8) };
+    ray_result(|context| {
+        context
+            .ray
+            .as_mut()
+            .ok_or("RT pipeline is unavailable")?
+            .set_surface_lights(data, count as usize)
     })
 }
 #[no_mangle]

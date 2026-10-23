@@ -24,10 +24,10 @@ import java.util.*;
 /** Native ray queries and owned host textures; never owns the host Vulkan device or atlas. */
 public final class RayWorld {
     private static NativeRayTracer nativeRt;
-    private static boolean initialized,failed,ready,reported,surfaceInitialized,surfaceFailed,surfaceReady,frameReady;
+    private static boolean initialized,failed,ready,reported,surfaceInitialized,surfaceFailed,surfaceReady,frameReady,playerShadowTraced,surfaceLightsActive;
     private static String surfaceDetail="Surface rays have not submitted";
-    private static GpuTexture surfaceColor,reflection;
-    private static GpuTextureView surfaceColorView,reflectionView;
+    private static GpuTexture surfaceColor,reflection,surfaceExtra;
+    private static GpuTextureView surfaceColorView,reflectionView,surfaceExtraView;
     private static GpuBuffer surfaceMetadata;
     private static final ByteBuffer SURFACE_META=ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder());
     private static int surfaceWidth,surfaceHeight;
@@ -171,8 +171,8 @@ public final class RayWorld {
     private static void pollSubmissions(boolean wait) {
         while(!SUBMISSIONS.isEmpty()) {
             var submission=SUBMISSIONS.peekFirst();
-            if(!submission.submitted && !submission.fence.awaitCompletion(0)) {
-                // A host submit may throw after queuing work. Keep ownership and flush its batch.
+            if(!submission.submitted) {
+                // Still in the host's open batch (or its submit threw); a fence on it cannot be awaited.
                 submission.encoder.submit();submission.submitted=true;
             }
             if(!submission.fence.awaitCompletion(wait?GpuFence.NO_TIMEOUT:0))break;
@@ -180,6 +180,8 @@ public final class RayWorld {
             submission.fence.close();SUBMISSIONS.removeFirst();
         }
     }
+    /** Every queued recording went out with the host's submit. */
+    public static void hostSubmitted() {for(var submission:SUBMISSIONS)submission.submitted=true;}
     /** Resource replacement only; steady rendering polls fences with a zero timeout. */
     public static void awaitSurfaceResources() {pollSubmissions(true);}
     /** Null until the native RT module is loaded. */
@@ -227,7 +229,7 @@ public final class RayWorld {
         return submission;
     }
     private static void submit(CommandEncoder encoder,Submission submission) {
-        encoder.submit();if(submission!=null)submission.submitted=true;
+        // Rides the frame's own host submit (hostSubmitted); see PackRenderer.renderScene.
         submittedGeneration=generation;lastSubmitNanos=System.nanoTime();
     }
     public static void renderFrame(GameRenderer renderer) {
@@ -276,13 +278,18 @@ public final class RayWorld {
             FRAME.putFloat(256,scene.cameraX(camera.pos.x)).putFloat(260,scene.cameraY(camera.pos.y)).putFloat(264,scene.cameraZ(camera.pos.z)).putFloat(268,0);
             FRAME.putFloat(272,w).putFloat(276,h).putFloat(280,RenderSystem.getDevice().getDeviceInfo().isZZeroToOne()?1:0).putFloat(284,0);
             var sky=renderer.gameRenderState().levelRenderState.skyRenderState;
-            SUN.set(RaySun.sample(sky.sunAngle,sky.rainBrightness,sky.skybox==net.minecraft.world.level.dimension.DimensionType.Skybox.OVERWORLD,parameter("sunStrength",2f)));
+            SUN.set(RaySun.shadowLight(sky.sunAngle,sky.rainBrightness,sky.skybox==net.minecraft.world.level.dimension.DimensionType.Skybox.OVERWORLD,parameter("sunStrength",2f)));
             ambient=RaySun.ambient(sky.sunAngle,sky.rainBrightness,sky.skybox==net.minecraft.world.level.dimension.DimensionType.Skybox.OVERWORLD);
             SUN.get(288,FRAME);
             FRAME.putFloat(304,ambient).putFloat(308,parameter("giStrength",.7f)).putFloat(312,scene.x()).putFloat(316,scene.z());FRAME.position(0).limit(320);
     }
     public static void beginSurfaceFrame() {surfaceReady=false;}
     public static boolean surfaceUnavailable() {return surfaceFailed;}
+    /** The native module traces block/dynamic light shadows; the terrain shader then hands the lightmap term over. */
+    public static boolean surfaceLightsActive() {return surfaceLightsActive && available() && !surfaceFailed;}
+    /** The last surface dispatch cast the local player's sun shadow, so the vanilla blob would double it. */
+    public static boolean playerShadowTraced() {return playerShadowTraced && !surfaceFailed && GreenMarineClient.enabled()
+        && ShaderRuntime.active()!=null && ShaderRuntime.rays().effective()==RayMode.HARDWARE;}
     public static boolean surfaceReady() {return surfaceReady && available() && !surfaceFailed;}
     public static String surfaceDetail() {return surfaceDetail;}
     public static long surfaceFrames() {return surfaceFrames;}
@@ -290,6 +297,8 @@ public final class RayWorld {
     public static PerformanceSamples.Snapshot surfaceGpuTiming() {return surfaceGpu==null?new PerformanceSamples.Snapshot(0,0,0,0,0):surfaceGpu.snapshot();}
     public static GpuTextureView surfaceLighting() {return surfaceReady()?surfaceColorView:EMPTY_VIEW[0];}
     public static GpuTextureView reflections() {return surfaceReady()?reflectionView:EMPTY_VIEW[2];}
+    /** x = ambient occlusion, y = sunlit camera-ray fraction, z = marched length (0 = none), w = 1 when written; unavailable is all zero. */
+    public static GpuTextureView surfaceExtra() {return surfaceReady() && surfaceExtraView!=null?surfaceExtraView:EMPTY_VIEW[0];}
     public static GpuBuffer surfaceBindings(CommandEncoder encoder) {
         if(EMPTY_VIEW[0]==null)bindings(encoder);
         if(surfaceMetadata==null)surfaceMetadata=RenderSystem.getDevice().createBuffer(()->"GreenMarine RaySurfaceFrame",GpuBuffer.USAGE_UNIFORM|GpuBuffer.USAGE_COPY_DST,16);
@@ -312,23 +321,35 @@ public final class RayWorld {
                 pollSubmissions(true);closeSurfaceTargets();surfaceColor=texture("surface ray lighting",GpuFormat.RGBA16_FLOAT,w,h);reflection=texture("traced surface reflection",GpuFormat.RGBA16_FLOAT,w,h);
                 surfaceColorView=RenderSystem.getDevice().createTextureView(surfaceColor);reflectionView=RenderSystem.getDevice().createTextureView(reflection);
                 encoder.clearColorTexture(surfaceColor,new Vector4f());encoder.clearColorTexture(reflection,new Vector4f());surfaceWidth=w;surfaceHeight=h;
+                if(nativeRt.extraAvailable()) {
+                    surfaceExtra=texture("surface ray occlusion and scattering",GpuFormat.RGBA16_FLOAT,w,h);
+                    surfaceExtraView=RenderSystem.getDevice().createTextureView(surfaceExtra);encoder.clearColorTexture(surfaceExtra,new Vector4f(1,0,0,0));
+                }
                 GreenMarine.LOGGER.info("Surface RT target: pack={}, quality={}, output={}x{}, capture={}x{}",
                     ShaderRuntime.active().definition().id(),ShaderRuntime.settings().quality(),w,h,viewportWidth,viewportHeight);
             }
             if(ShaderRuntime.settings().profiling() && surfaceGpu==null)surfaceGpu=new GpuTimer();
             if(!ShaderRuntime.settings().profiling() && surfaceGpu!=null) {surfaceGpu.close();surfaceGpu=null;}
-            FRAME.putFloat(272,w).putFloat(276,h);FRAME.position(0).limit(320);
+            FRAME.putFloat(268,indoor()).putFloat(272,w).putFloat(276,h).putFloat(284,volumetricSteps());FRAME.position(0).limit(320);
             lease=beginSubmission();if(lease<0){surfaceDetail="RT submission slots busy; raster surface fallback";return;}
             int measure=surfaceGpu!=null && surfaceFrames>=40?surfaceGpu.begin(encoder):-1;
             var atlas=Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS).getTextureView();
             externalFrame(Minecraft.getInstance());
+            if(nativeRt.surfaceLightsAvailable() && scene!=null) {
+                int lights=SurfaceLights.collect(Minecraft.getInstance(),scene.x(),scene.y(),scene.z());
+                surfaceLightsActive=nativeRt.surfaceLights(SurfaceLights.data(),lights)==0;
+            } else surfaceLightsActive=false;
             // Extended modules take 64 boxes plus the combined accessory atlas; legacy keeps 16 boxes/one skin.
             boolean extendedActors=nativeRt.extendedActorsAvailable();
             var player=(extendedActors || nativeRt.actorsAvailable()) && scene!=null
                 ?PlayerReflection.snapshot(Minecraft.getInstance(),scene.x(),scene.y(),scene.z(),extendedActors):null;
             var skin=player!=null && player.boxes()>0 && player.skin()!=null?player.skin():atlas;
             var backend=(VulkanCommandEncoder)((FrontendCommandEncoder)encoder).backend();var command=backend.allocateAndBeginTransientCommandBuffer();
-            int result=player==null
+            int result=player!=null && extendedActors && surfaceExtra!=null
+                ?nativeRt.recordSurfaceExtra(command.address(),FRAME,w,h,((VulkanGpuTexture)surfaceColor).vkImage(),((VulkanGpuTexture)reflection).vkImage(),
+                    ((VulkanGpuTexture)surfaceExtra).vkImage(),((VulkanGpuTextureView)atlas).vkImageView(),((VulkanGpuTextureView)normalDepth).vkImageView(),
+                    ((VulkanGpuTextureView)material).vkImageView(),player.data(),((VulkanGpuTextureView)skin).vkImageView())
+                :player==null
                 ?nativeRt.recordSurface(command.address(),FRAME,w,h,((VulkanGpuTexture)surfaceColor).vkImage(),((VulkanGpuTexture)reflection).vkImage(),
                     ((VulkanGpuTextureView)atlas).vkImageView(),((VulkanGpuTextureView)normalDepth).vkImageView(),((VulkanGpuTextureView)material).vkImageView())
                 :extendedActors?nativeRt.recordSurfaceActorsExtended(command.address(),FRAME,w,h,((VulkanGpuTexture)surfaceColor).vkImage(),((VulkanGpuTexture)reflection).vkImage(),
@@ -341,21 +362,39 @@ public final class RayWorld {
             int ended=org.lwjgl.vulkan.VK12.vkEndCommandBuffer(command);if(ended!=0)throw new IllegalStateException("Unable to finish surface rays: "+ended);
             if(lease>0)fence=encoder.createFence();
             backend.execute(command);executed=true;
-            var submission=queued(encoder,lease,fence,surfaceColor,reflection,atlas,normalDepth,material,skin);lease=0;
+            var submission=queued(encoder,lease,fence,surfaceColor,reflection,Objects.requireNonNullElse(surfaceExtra,surfaceColor),atlas,normalDepth,material,skin);lease=0;
             if(surfaceGpu!=null)surfaceGpu.end(encoder,measure);
-            submit(encoder,submission);surfaceFrames++;surfaceReady=true;
+            submit(encoder,submission);surfaceFrames++;surfaceReady=true;playerShadowTraced=player!=null && player.boxes()>0;
             surfaceDetail="Hardware surface RT active: raster materials, sun/GI and offscreen model reflections; "
                 +(player==null?"local player extension unavailable":PlayerReflection.detail())
                 +(externalDetail.isEmpty()?"":"; "+externalDetail);
             if(surfaceFrames>40)SURFACE_CPU.add((System.nanoTime()-started)/1e6);
         } catch(RuntimeException|LinkageError error) {
-            surfaceFailed=true;surfaceDetail="Surface RT unavailable: "+error.getMessage()+"; raster surface fallback";GreenMarine.LOGGER.error(surfaceDetail,error);
+            surfaceFailed=true;playerShadowTraced=false;surfaceDetail="Surface RT unavailable: "+error.getMessage()+"; raster surface fallback";GreenMarine.LOGGER.error(surfaceDetail,error);
         } finally {if(lease>0 && !executed){nativeRt.submissionCancel(lease);if(fence!=null)fence.close();}}
     }
     private static void closeSurfaceTargets() {
-        if(surfaceColorView!=null)surfaceColorView.close();if(reflectionView!=null)reflectionView.close();
-        if(surfaceColor!=null)surfaceColor.close();if(reflection!=null)reflection.close();
-        surfaceColorView=reflectionView=null;surfaceColor=reflection=null;surfaceWidth=surfaceHeight=0;
+        if(surfaceColorView!=null)surfaceColorView.close();if(reflectionView!=null)reflectionView.close();if(surfaceExtraView!=null)surfaceExtraView.close();
+        if(surfaceColor!=null)surfaceColor.close();if(reflection!=null)reflection.close();if(surfaceExtra!=null)surfaceExtra.close();
+        surfaceColorView=reflectionView=surfaceExtraView=null;surfaceColor=reflection=surfaceExtra=null;surfaceWidth=surfaceHeight=0;
+    }
+    /** Shadow rays per camera ray for volumetric sunlight; packs opt in with a positive `volumetric` parameter. */
+    private static float indoor;
+    /** 0 under open sky, 1 with no sky light at the camera; eased so doorways do not pop. */
+    private static float indoor() {
+        var client=Minecraft.getInstance();
+        if(client.level==null)return indoor;
+        var camera=client.gameRenderer.mainCamera().position();
+        // Only real enclosure counts: under trees or in tall grass sky light is 12..14, which made
+        // sunlit outdoor air dense and the fog vanish a few blocks higher.
+        int sky=client.level.getBrightness(net.minecraft.world.level.LightLayer.SKY,BlockPos.containing(camera));
+        float target=1f-Math.clamp((sky-3)/7f,0f,1f);
+        indoor+=(target-indoor)*.05f;
+        return Math.clamp(indoor,0f,1f);
+    }
+    private static int volumetricSteps() {
+        if(parameter("volumetric",0f)<=0f)return 0;
+        return switch(ShaderRuntime.settings().quality()) {case LOW->4;case MEDIUM->6;case HIGH->8;case ULTRA->12;};
     }
     private static float parameter(String name,float fallback) {
         var pack=ShaderRuntime.active();var script=ShaderRuntime.script();
@@ -401,7 +440,7 @@ public final class RayWorld {
         pollSubmissions(true);PlayerReflection.close();SCAN.reset();requestedRevision=publishedRevision=-1;requestedContent=null;
         generation=submittedGeneration=lastPublishNanos=lastSubmitNanos=packNanos=prepareNanos=publishNanos=busyCount=discarded=0;
         if(nativeRt!=null && initialized) nativeRt.resetScene();
-        scene=null;ready=reported=surfaceReady=surfaceFailed=frameReady=false;surfaceFrames=0;SURFACE_CPU.clear();closeSurfaceTargets();
+        scene=null;ready=reported=surfaceReady=surfaceFailed=frameReady=playerShadowTraced=surfaceLightsActive=false;SurfaceLights.reset();surfaceFrames=0;SURFACE_CPU.clear();closeSurfaceTargets();
         if(surfaceMetadata!=null)surfaceMetadata.close();surfaceMetadata=null;if(surfaceGpu!=null)surfaceGpu.close();surfaceGpu=null;surfaceDetail="Surface rays have not submitted";failed=false;frames=scanNanos=buildNanos=0;CPU.clear();closeTargets();
         detail=initialized?"Hardware pipeline initialized; waiting for a world scene":"Hardware RT has not initialized";
         if(gpu!=null) gpu.close();gpu=null;

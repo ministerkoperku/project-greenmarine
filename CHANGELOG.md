@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.9.7
+
+- Solstice RT: ray-traced volumetric sunlight. The native pass marches each reduced
+  camera ray with shadow rays (4/6/8/12 steps by quality) and the scene pass adds
+  forward-scattered sun shafts (`volumetric`).
+- Ray-traced ambient occlusion from the existing GI rays darkens sky ambient and,
+  partially, block light in corners, under canopies and overhangs (`occlusion`).
+- Every surface gets a GGX sun highlight shadowed by the traced sun ray
+  (`specular`), and texture relief perturbs shading normals from atlas luminance
+  (`relief`). These are procedural; resource pack normal/specular maps are not read.
+- Optional native export `greenmarine_surface_rt_record_extra` with a third output
+  (`RaySurfaceExtra`, include `surface_extra.glsl`); older natives fall back to the
+  previous two-output call.
+- `surfaceDiagnostic` 4, 5 and 6 show traced occlusion, sunlit ray fraction and raw
+  reflection hits / native sun visibility.
+- Solstice sky and light use a single-scattering atmosphere (Rayleigh + Mie, air mass): blue
+  noon sky, visible sun disc, orange/red sunsets that also tint terrain light and fog, darker
+  nights. Fog is thinner and takes the sky colour of its direction; cloud coverage defaults to 0.5.
+- `weather` (replaces `waveDiagnostic`, same slot): 0 auto gives every in-game day its own mood
+  from clear to overcast, 1-4 pin clear, hazy, cloudy, overcast. Wave heights moved to
+  `surfaceDiagnostic` 7.
+- Rain wetness builds over the rain's length and dries over minutes; puddles grow from noise
+  hollows with wetness, ripple while it rains, and lingering wetness thickens fog.
+- Indoor volumetric light: with no sky light at the camera the air is denser, so window beams show.
+- Block-light shadow rays ignore alpha-tested geometry (grass around a held torch).
+- Distant Horizons water matches near Solstice water (no biome hue boost, nominal floor seen
+  through 16 blocks, 0.9 opacity) and greenish swamp water is recognised.
+- Metals render as metal: no diffuse term, the traced reflection tinted by albedo Fresnel,
+  roughness blurring towards the surface's irradiance; `reflection` scales metalness.
+- LabPBR loader (`PbrAtlas`, `labpbr.glsl`): `_s`/`_n` maps from resource packs laid out like
+  the block atlas, overriding roughness/metal/class in capture and shading, normal map + AO,
+  emission. Not working yet: the shader reads zeros from the uploaded maps (see PbrAtlas).
+  Without packs it is inert (1x1 placeholders). `surfaceDiagnostic` 9 shows what it reads.
+- `surfaceDiagnostic` 8 shows height-field sun visibility.
+- Sun shadows beyond the traced scene from a 512x512 column height field (distant mountains no
+  longer let sunlight through until they snap into the scene); Distant Horizons LODs use it too.
+- The traced scene spans two sections below and above the camera's, so rising a few blocks no
+  longer drops the ground and every shadow.
+- LOD and sky ray directions use two points on the pixel ray: view bobbing no longer swings LOD
+  positions by hundreds of blocks (LODs darkening while walking).
+- DH 3.3 writes LOD depth into the host buffer; LODs are relit unless a chunk is clearly nearer.
+- Fixed surfaces closer than about one block dropping out of the material capture
+  (reflections turning into sky, near walls losing RT light): the derivative normal
+  underflowed its normalization floor.
+
 ## 0.9.6
 
 - External renderer API (`ExternalRenderers`): meshes from other mods are ray traced

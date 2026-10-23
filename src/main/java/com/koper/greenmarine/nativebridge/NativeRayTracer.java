@@ -8,13 +8,14 @@ import static java.lang.foreign.ValueLayout.*;
 /** Additive RT ABI v1; all device/command/image handles are borrowed from the verified host. */
 public final class NativeRayTracer {
     private MethodHandle init,scene,record,reset;
-    private MethodHandle surfaceInit,surfaceRecord,surfaceActorsRecord,surfaceActorsExtendedRecord;
+    private MethodHandle surfaceInit,surfaceRecord,surfaceActorsRecord,surfaceActorsExtendedRecord,surfaceExtraRecord;
     public static final int SURFACE_ACTOR_BYTES=4624, SURFACE_EXTENDED_ACTOR_BYTES=18448;
     private String surfaceError="Surface RT native module is unavailable";
     private volatile String error="RT native module is unavailable";
     private MethodHandle asyncBegin,asyncSubmitted,asyncCompleted,asyncCancel,prepare,publish,discard,sceneAsync,resetAsync,prepareStatusHandle,prepareErrorHandle,asyncStatsHandle;
     private String asyncError="Async RT native module is unavailable";
-    private MethodHandle meshPrepare,meshRelease,externalFrame,externalStats;
+    private MethodHandle meshPrepare,meshRelease,externalFrame,externalStats,surfaceLights;
+    public static final int MAX_SURFACE_LIGHTS=32;
     /** Result of an external mesh upload: token 0 with status 1 means the budget is full. */
     public record MeshResult(long token,int status,String error) {}
     private volatile int lastPrepareStatus=-2;
@@ -56,6 +57,13 @@ public final class NativeRayTracer {
         } catch(Throwable unavailable) {surfaceActorsExtendedRecord=null;}
         try {
             var linker=Linker.nativeLinker();
+            var version=linker.downcallHandle(symbols.find("greenmarine_surface_rt_extra_api_version").orElseThrow(),FunctionDescriptor.of(JAVA_INT));
+            if((int)version.invokeExact()!=1) throw new IllegalStateException("Unsupported surface extra ABI");
+            surfaceExtraRecord=linker.downcallHandle(symbols.find("greenmarine_surface_rt_record_extra").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT,JAVA_LONG,ADDRESS,JAVA_INT,JAVA_INT,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,JAVA_LONG,ADDRESS,JAVA_LONG));
+        } catch(Throwable unavailable) {surfaceExtraRecord=null;}
+        try {
+            var linker=Linker.nativeLinker();
             var version=linker.downcallHandle(symbols.find("greenmarine_rt_external_api_version").orElseThrow(),FunctionDescriptor.of(JAVA_INT));
             if((int)version.invokeExact()!=1) throw new IllegalStateException("Unsupported external geometry ABI");
             meshPrepare=linker.downcallHandle(symbols.find("greenmarine_rt_mesh_prepare").orElseThrow(),FunctionDescriptor.of(JAVA_LONG,ADDRESS,JAVA_INT));
@@ -63,6 +71,9 @@ public final class NativeRayTracer {
             externalFrame=linker.downcallHandle(symbols.find("greenmarine_rt_external_frame").orElseThrow(),FunctionDescriptor.of(JAVA_INT,ADDRESS,ADDRESS,JAVA_INT));
             externalStats=linker.downcallHandle(symbols.find("greenmarine_rt_external_stats").orElseThrow(),FunctionDescriptor.of(JAVA_INT,ADDRESS,JAVA_INT));
         } catch(Throwable unavailable) {meshPrepare=meshRelease=externalFrame=externalStats=null;}
+        try {
+            surfaceLights=Linker.nativeLinker().downcallHandle(symbols.find("greenmarine_rt_surface_lights").orElseThrow(),FunctionDescriptor.of(JAVA_INT,ADDRESS,JAVA_INT));
+        } catch(Throwable unavailable) {surfaceLights=null;}
         try {
             var linker=Linker.nativeLinker();
             var version=linker.downcallHandle(symbols.find("greenmarine_rt_async_api_version").orElseThrow(),FunctionDescriptor.of(JAVA_INT));
@@ -183,6 +194,28 @@ public final class NativeRayTracer {
         } catch(Throwable failed) {surfaceError=failed.toString();return -3;}
     }
 
+    public boolean extraAvailable() {return extendedActorsAvailable() && surfaceExtraRecord!=null;}
+    /** Extended actor dispatch plus a third RGBA16F output: ambient occlusion, sunlit
+     * camera-ray fraction and traced ray length. Frame float 71 is the volumetric step count. */
+    public int recordSurfaceExtra(long command,ByteBuffer frame,int width,int height,long lightingImage,long reflectionImage,long extraImage,
+        long atlasView,long surfaceNormalView,long surfaceAlbedoView,ByteBuffer actors,long skin) {
+        if(!extraAvailable()) {surfaceError="Surface extra output module unavailable";return -2;}
+        if(extraImage==0 || extraImage==lightingImage || extraImage==reflectionImage)throw new IllegalArgumentException("Invalid surface extra image");
+        if(actors==null || !actors.isDirect() || actors.remaining()!=SURFACE_EXTENDED_ACTOR_BYTES)throw new IllegalArgumentException("Invalid surface actor ABI");
+        var payload=actors.duplicate().order(java.nio.ByteOrder.nativeOrder());
+        int base=payload.position();float count=payload.getFloat(base);
+        if(!Float.isFinite(count) || count<0 || count>64 || count!=(int)count || (count>0 && skin==0))throw new IllegalArgumentException("Invalid actor count or skin");
+        if(!frame.isDirect() || frame.remaining()!=320)throw new IllegalArgumentException("Invalid native surface frame ABI");
+        if(command==0 || width<1 || height<1 || lightingImage==0 || reflectionImage==0 || lightingImage==reflectionImage
+            || atlasView==0 || surfaceNormalView==0 || surfaceAlbedoView==0)throw new IllegalArgumentException("Invalid native surface handles or dimensions");
+        try {
+            int code=(int)surfaceExtraRecord.invokeExact(command,MemorySegment.ofBuffer(frame),width,height,
+                lightingImage,reflectionImage,extraImage,atlasView,surfaceNormalView,surfaceAlbedoView,MemorySegment.ofBuffer(actors),skin);
+            surfaceError=code==0?"":"Surface extra ray query dispatch failed (native status "+code+")";
+            return code;
+        } catch(Throwable failed) {surfaceError=failed.toString();return -3;}
+    }
+
     private static MethodHandle serialCall(Linker linker,SymbolLookup symbols,String name) {
         return linker.downcallHandle(symbols.find(name).orElseThrow(),FunctionDescriptor.of(JAVA_INT,JAVA_LONG));
     }
@@ -276,6 +309,16 @@ public final class NativeRayTracer {
             var ids=arena.allocate(JAVA_LONG,Math.max(1,count));var matrices=arena.allocate(JAVA_FLOAT,Math.max(1,count*12));
             MemorySegment.copy(tokens,0,ids,JAVA_LONG,0,count);MemorySegment.copy(transforms,0,matrices,JAVA_FLOAT,0,count*12);
             return (int)externalFrame.invokeExact(ids,matrices,count);
+        } catch(Throwable failed) {surfaceError=failed.toString();return -3;}
+    }
+    public boolean surfaceLightsAvailable() {return surfaceLights!=null;}
+    /** Render thread. Per light: scene-relative centre, level 0..15, linear colour, unused. Count 0 clears. */
+    public int surfaceLights(float[] lights,int count) {
+        if(surfaceLights==null)return -2;
+        if(count<0 || count>MAX_SURFACE_LIGHTS || lights.length<count*8)throw new IllegalArgumentException("Invalid surface lights");
+        try(var arena=Arena.ofConfined()) {
+            var data=arena.allocate(JAVA_FLOAT,Math.max(1,count*8));MemorySegment.copy(lights,0,data,JAVA_FLOAT,0,count*8);
+            return (int)surfaceLights.invokeExact(data,count);
         } catch(Throwable failed) {surfaceError=failed.toString();return -3;}
     }
     /** Registered meshes, their bytes, instances queued for the next recording. */

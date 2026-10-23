@@ -55,7 +55,9 @@ Entities, fluids as geometry, particles and distant terrain are not ray targets.
 **Surface rays** (used by Solstice) start from a material capture of the visible
 terrain: sun visibility, four diffuse GI rays and, on reflective materials, a
 reflection ray per surfel, written at quarter or half resolution and reconstructed
-against the full-resolution capture. Bindings: `surface_rays.glsl`, described in
+against the full-resolution capture. Natives with `greenmarine_surface_rt_record_extra`
+also write traced ambient occlusion and a volumetric sun march per reduced camera
+ray (`surface_extra.glsl`, `RaySurfaceExtra`). Bindings: `surface_rays.glsl`, described in
 [surface rendering](SURFACE-RENDERING.md) and [Solstice RT](SOLSTICE-RT.md).
 
 **World rays** start from the camera's own primary rays and export half-resolution

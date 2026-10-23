@@ -62,12 +62,17 @@ public final class RuntimeProbe implements ClientModInitializer {
             if(Boolean.getBoolean("greenmarine.probe.hardware_rt")) {HardwareRtProbe.abort(client,OUTPUT,new IllegalStateException("Probe detected renderer failure"));return;}
             restoreSettings(); result("failed"); client.stop(); return;
         }
-        if ((System.nanoTime() - started) / 1_000_000_000L > (Boolean.getBoolean("greenmarine.probe.dynamic_rays") || Boolean.getBoolean("greenmarine.probe.performance")?300:150)) {
+        if ((System.nanoTime() - started) / 1_000_000_000L > (Boolean.getBoolean("greenmarine.probe.look")?400:Boolean.getBoolean("greenmarine.probe.dynamic_rays") || Boolean.getBoolean("greenmarine.probe.performance") || Boolean.getBoolean("greenmarine.probe.near_reflection") || Boolean.getBoolean("greenmarine.probe.distant") || Boolean.getBoolean("greenmarine.probe.mobs") || Boolean.getBoolean("greenmarine.probe.torch") || Boolean.getBoolean("greenmarine.probe.water")?300:150)) {
             if(Boolean.getBoolean("greenmarine.probe.performance")) {TerrainPerformanceProbe.abort(client,OUTPUT,new IllegalStateException("Performance probe timed out"));return;}
             if(Boolean.getBoolean("greenmarine.probe.named_passes")) {NamedPassProbe.abort(client,OUTPUT,new IllegalStateException("Performance probe timed out"));return;}
             if(Boolean.getBoolean("greenmarine.probe.history_compatibility")) {HistoryCompatibilityProbe.abort(client,OUTPUT,new IllegalStateException("Performance probe timed out"));return;}
             if(Boolean.getBoolean("greenmarine.probe.dynamic_rays")) {DynamicRaySceneProbe.abort(client,OUTPUT,new IllegalStateException("Probe failed or timed out"));return;}
             if(Boolean.getBoolean("greenmarine.probe.world_programs")) {WorldProgramsProbe.abort(client,OUTPUT,new IllegalStateException("Probe failed or timed out"));return;}
+            if(Boolean.getBoolean("greenmarine.probe.water")) {DistantWaterProbe.finish(client,OUTPUT,"timed out");return;}
+            if(Boolean.getBoolean("greenmarine.probe.torch")) {TorchShadowProbe.finish(client,OUTPUT,"timed out");return;}
+            if(Boolean.getBoolean("greenmarine.probe.mobs")) {MobReflectionProbe.finish(client,OUTPUT,"timed out");return;}
+            if(Boolean.getBoolean("greenmarine.probe.distant")) {DistantProbe.finish(client,OUTPUT,"timed out");return;}
+            if(Boolean.getBoolean("greenmarine.probe.near_reflection")) {NearReflectionProbe.abort(client,OUTPUT,new IllegalStateException("Runtime probe timed out"));return;}
             if(Boolean.getBoolean("greenmarine.probe.hardware_rt")) {HardwareRtProbe.abort(client,OUTPUT,new IllegalStateException("Runtime probe timed out"));return;}
             GreenMarine.LOGGER.error("Runtime probe timed out at stage {}", stage);
             failed = true;
@@ -100,11 +105,17 @@ public final class RuntimeProbe implements ClientModInitializer {
         if (screen != null && (name.equals("PauseScreen") || name.equals("DemoIntroScreen") || (client.isDemo() && name.equals("PopupScreen")))) {
             client.gui.setScreen(null);
         }
+        if(Boolean.getBoolean("greenmarine.probe.look")) { LookProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.dynamic_rays")) { DynamicRaySceneProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.performance")) { TerrainPerformanceProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.named_passes")) { NamedPassProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.history_compatibility")) { HistoryCompatibilityProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.world_programs")) { WorldProgramsProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.water")) { DistantWaterProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.torch")) { TorchShadowProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.mobs")) { MobReflectionProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.distant")) { DistantProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.near_reflection")) { NearReflectionProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.hardware_rt")) { HardwareRtProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.render_api")) { RenderApiProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.voxel")) { VoxelRuntimeProbe.tick(client,OUTPUT); return; }

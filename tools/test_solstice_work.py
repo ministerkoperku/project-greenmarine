@@ -57,7 +57,7 @@ class SolsticeWorkTest(unittest.TestCase):
             if(solPuddle(p,up,.65f)!=0 || calls!=0)return 3;
             parameters[1]=0;if(solPuddle(p,up,1)!=0 || calls!=0)return 4;
             parameters[1]=1;parameters[0]=0;if(solPuddle(p,up,1)!=0 || calls!=0)return 5;
-            parameters[0]=1;if(solPuddle(p,up,1)<.99f || calls!=1)return 6;
+            parameters[0]=1;if(solPuddle(p,up,1)<.99f || calls!=2)return 6;
             return 0;
         }
         '''

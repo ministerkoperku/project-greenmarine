@@ -50,7 +50,32 @@ Hit trace(vec3 origin,vec3 direction,float reach) {
     return hit;
 }
 
+// Block-light occlusion ignores alpha-tested geometry: grass, flowers and leaves around a held
+// torch otherwise stamp sharp blade shadows on the block under the player.
+bool blockLightOccluded(vec3 origin,vec3 direction,float reach) {
+    rayQueryEXT ray;
+    rayQueryInitializeEXT(ray,World,gl_RayFlagsNoneEXT,255,origin,.015,direction,reach);
+    while(rayQueryProceedEXT(ray)) {
+        if(rayQueryGetIntersectionTypeEXT(ray,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
+            Triangle t=marineFetchTriangle(rayQueryGetIntersectionInstanceCustomIndexEXT(ray,false),rayQueryGetIntersectionPrimitiveIndexEXT(ray,false));
+            if(t.uv2.z<.5 || t.uv2.z>1.5) rayQueryConfirmIntersectionEXT(ray);
+        }
+    }
+    return rayQueryGetIntersectionTypeEXT(ray,true)==gl_RayQueryCommittedIntersectionTriangleEXT;
+}
 #include "diffuse_samples.glsl"
+// Same quadrature rotated and radially offset per producer pixel. A 4x4 block covers 16
+// rotations, so the shared-memory filter integrates 64 directions instead of copying the
+// four fixed hit points as a sharp mirror-like image of nearby blocks.
+vec3 marineDiffuseDirection(vec3 normal,int index,uvec2 pixel) {
+    const uint bayer[16]=uint[16](0u,8u,2u,10u,12u,4u,14u,6u,3u,11u,1u,9u,15u,7u,13u,5u);
+    float phase=(float(bayer[(pixel.y&3u)*4u+(pixel.x&3u)])+.5)/16.0;
+    vec3 tangent=normalize(abs(normal.y)<.9?cross(normal,vec3(0,1,0)):cross(normal,vec3(1,0,0)));
+    vec3 bitangent=cross(normal,tangent);
+    float angle=.785398163+2.39996323*float(index)+phase*1.57079633;
+    float radius=sqrt((float(index)+phase)/4.0);
+    return normalize(tangent*cos(angle)*radius+bitangent*sin(angle)*radius+normal*sqrt(1.0-radius*radius));
+}
 layout(set=0,binding=5) uniform sampler2D SurfaceNormal;
 layout(set=0,binding=6) uniform sampler2D SurfaceAlbedo;
 #include "surface_actors.glsl"
@@ -71,65 +96,167 @@ vec3 sunIrradiance(vec3 pos,vec3 normal) {
     float diffuse=max(dot(normal,normalize(Sun.xyz)),0.0);
     return vec3(max(Options.x,0.0)+diffuse*max(Sun.w,0.0)*sunVisibility(pos,normal));
 }
+// Block and dynamic light sources: uvec4 header (count), then per light vec4(centre, level) and vec4(colour).
+struct SurfaceLight { vec4 position; vec4 color; };
+layout(std430,set=0,binding=10) readonly buffer SurfaceLights { uvec4 lightInfo; SurfaceLight surfaceLights[]; };
+// Vanilla's block light curve (level falls one per block) per source; only the four brightest
+// candidates get an occlusion ray, and the strongest visible one wins like the lightmap.
+vec3 tracedBlockLight(vec3 pos,vec3 normal) {
+    vec3 value[4];vec3 direction[4];float reach[4];float weight[4];
+    for(int k=0;k<4;k++) weight[k]=0.0;
+    for(uint i=0u;i<min(lightInfo.x,32u);i++) {
+        SurfaceLight light=surfaceLights[i];
+        vec3 toLight=light.position.xyz-pos;float distance=length(toLight);
+        float level=(light.position.w-distance)/15.0;
+        if(level<=0.0 || distance<.01) continue;
+        vec3 dir=toLight/distance;float facing=dot(normal,dir);
+        if(facing<-.1) continue;
+        vec3 v=(light.color.rgb*level*level*level+vec3(.035)*level)*mix(.45,1.0,clamp(facing,0.0,1.0));
+        float w=max(v.r,max(v.g,v.b));
+        int slot=-1;float lowest=1e9;
+        for(int k=0;k<4;k++) if(weight[k]<lowest){lowest=weight[k];slot=k;}
+        if(w<=lowest) continue;
+        value[slot]=v;direction[slot]=dir;reach[slot]=max(distance-.6,.02);weight[slot]=w;
+    }
+    vec3 strongest=vec3(0);
+    for(int pass=0;pass<4;pass++) {
+        int best=-1;float top=0.0;
+        for(int k=0;k<4;k++) if(weight[k]>top){top=weight[k];best=k;}
+        if(best<0) break;
+        weight[best]=0.0;
+        if(!blockLightOccluded(pos+normal*.035,direction[best],reach[best])){strongest=value[best];break;}
+    }
+    return strongest;
+}
+// Diffuse bounce sees the mean texture colour; full-detail texels made bounce light
+// reproduce the neighbouring block's texture (campfire flames on dirt, grass on wool).
+vec3 linearBounceSurface(Hit hit) {
+    Triangle t=marineFetchTriangle(hit.instance,hit.primitive);
+    vec3 albedo=t.uv2.z>1.5?t.tint.rgb:textureLod(Atlas,triangleUV(t,hit.bary),4.0).rgb*t.tint.rgb;
+    return pow(max(albedo,vec3(0)),vec3(2.2));
+}
+shared vec4 bounceShared[64];
+shared vec4 planeShared[64];
+shared float openShared[64];
 void main() {
     uvec2 p=gl_GlobalInvocationID.xy;uint width=uint(Viewport.x),height=uint(Viewport.y);
-    if(p.x>=width || p.y>=height) return;
+    bool inside=p.x<width && p.y<height;
     uint i=p.y*width+p.x,count=width*height;
-    ivec2 captureSize=textureSize(SurfaceNormal,0);
-    // Integer centre mapping avoids rounding either side of exact nearest-texel boundaries.
-    ivec2 captureTexel=min(ivec2(((p*2u+1u)*uvec2(captureSize))/(uvec2(width,height)*2u)),captureSize-1);
-    vec2 uv=(vec2(captureTexel)+.5)/vec2(captureSize);
-    vec4 normalDepth=texelFetch(SurfaceNormal,captureTexel,0);
-    vec4 albedoMaterial=texelFetch(SurfaceAlbedo,captureTexel,0);
-    vec4 lighting=vec4(0),reflection=vec4(0);
-    if(dot(normalDepth.xyz,normalDepth.xyz)>.25 && normalDepth.w>=0.0 && normalDepth.w<1.0) {
-        // The paired RayCamera inverses include the same bob/hurt perspective eye shift.
-        float clipDepth=Viewport.z>.5?normalDepth.w:normalDepth.w*2.0-1.0;
-        vec4 local=InverseProjection*vec4(uv*2.0-1.0,clipDepth,1.0);
-        vec3 pos=Camera.xyz+(InverseView*vec4(local.xyz/local.w,1.0)).xyz;
-        vec3 eye=Camera.xyz+InverseView[3].xyz;
-        vec3 incoming=normalize(pos-eye);
-        vec3 normal=normalize(normalDepth.xyz);
-        if(dot(normal,incoming)>0.0) normal=-normal;
-        float visibility=sunVisibility(pos,normal);
-        if(visibility>0.0) visibility*=actorSunVisibility(pos+normal*.035,normalize(Sun.xyz));
-        float diffuse=max(dot(normal,normalize(Sun.xyz)),0.0);
-        vec3 irradiance=vec3(max(Options.x,0.0)+diffuse*max(Sun.w,0.0)*visibility);
-        if(Options.y>0.0) {
-            vec3 diffuseBounce=vec3(0);
-            for(int j=0;j<4;j++) {
-                vec3 bounce=marineDiffuseDirection(normal,j);
-                Hit secondary=trace(pos+normal*.035,bounce,12.0);
-                if(secondary.found) {
-                    vec3 secondaryPos=pos+normal*.035+bounce*secondary.distance;
-                    vec3 secondaryNormal=hitNormal(secondary,bounce);
-                    diffuseBounce+=linearSurface(secondary)*(sunIrradiance(secondaryPos,secondaryNormal)
-                        +vec3(marineFetchTriangle(secondary.instance,secondary.primitive).uv2.w*.45));
-                } else diffuseBounce+=vec3(.10,.15,.22)*(max(Options.x,0.0)/.45);
+    // extra.w: 1 + indoor factor (Camera.w); readers clamp it to 1 as the written flag.
+    vec4 lighting=vec4(0),reflection=vec4(0),extra=vec4(1,0,0,1.0+clamp(Camera.w,0.0,1.0));
+    float open=4.0;
+    vec3 pos=vec3(0),normal=vec3(0),diffuseBounce=vec3(0);
+    bool surface=false;
+    if(inside) {
+        ivec2 captureSize=textureSize(SurfaceNormal,0);
+        // Integer centre mapping avoids rounding either side of exact nearest-texel boundaries.
+        ivec2 captureTexel=min(ivec2(((p*2u+1u)*uvec2(captureSize))/(uvec2(width,height)*2u)),captureSize-1);
+        vec2 uv=(vec2(captureTexel)+.5)/vec2(captureSize);
+        vec4 normalDepth=texelFetch(SurfaceNormal,captureTexel,0);
+        vec4 albedoMaterial=texelFetch(SurfaceAlbedo,captureTexel,0);
+        bool captured=dot(normalDepth.xyz,normalDepth.xyz)>.25 && normalDepth.w>=0.0 && normalDepth.w<1.0;
+        // Volumetric sun: the camera ray is marched to the captured surface (or the scene
+        // edge for sky) with one shadow ray per step. Viewport.w steps; zero disables it.
+        int steps=int(Viewport.w+.5);
+        if(steps>0 && Sun.w>0.0 && Sun.y>-.05) {
+            float rayDepth=captured?(Viewport.z>.5?normalDepth.w:normalDepth.w*2.0-1.0):.5;
+            vec4 rayLocal=InverseProjection*vec4(uv*2.0-1.0,rayDepth,1.0);
+            vec3 rayEye=Camera.xyz+InverseView[3].xyz;
+            vec3 target=Camera.xyz+(InverseView*vec4(rayLocal.xyz/rayLocal.w,1.0)).xyz;
+            vec3 direction=normalize(target-rayEye);
+            float reach=min(captured?length(target-rayEye):48.0,48.0);
+            // Interleaved gradient noise spreads step positions; the consumer filters spatially.
+            float jitter=fract(52.9829189*fract(dot(vec2(p),vec2(.06711056,.00583715))));
+            float lit=0.0;
+            for(int s=0;s<steps;s++) {
+                float t=(float(s)+jitter)/float(steps);
+                lit+=traceSunTransmission(rayEye+direction*(reach*t*t),normalize(Sun.xyz),96.0);
             }
-            irradiance+=diffuseBounce*(Options.y*.25);
+            extra.yz=vec2(lit/float(steps),reach);
         }
-        lighting=vec4(irradiance,visibility);
-        int materialClass=int(floor(albedoMaterial.a+.001));
-        float roughness=clamp(fract(albedoMaterial.a)*2.0,0.0,1.0);
-        // Ordinary opaque materials do not consume reflection outputs.
-        if(materialClass==2 || materialClass==3 || materialClass==4 || materialClass==5 || materialClass==6 || materialClass==8 || materialClass==9) {
-            vec3 reflected=normalize(reflect(incoming,normal));
-            Hit reflectedHit=trace(pos+normal*.035,reflected,96.0);
-            ActorHit actorHit=traceActors(pos+normal*.035,reflected,reflectedHit.distance);
-            if(actorHit.found) {
-                vec3 hitPos=pos+normal*.035+reflected*actorHit.distance;
-                reflection=vec4(actorHit.albedo*sunIrradiance(hitPos,actorHit.normal),1);
-            } else if(reflectedHit.found) {
-                vec3 hitPos=pos+normal*.035+reflected*reflectedHit.distance;
-                vec3 n=hitNormal(reflectedHit,reflected);
-                vec3 emission=vec3(marineFetchTriangle(reflectedHit.instance,reflectedHit.primitive).uv2.w*.45);
-                reflection=vec4(linearSurface(reflectedHit)*(sunIrradiance(hitPos,n)+emission),1);
+        if(captured) {
+            surface=true;
+            // The paired RayCamera inverses include the same bob/hurt perspective eye shift.
+            float clipDepth=Viewport.z>.5?normalDepth.w:normalDepth.w*2.0-1.0;
+            vec4 local=InverseProjection*vec4(uv*2.0-1.0,clipDepth,1.0);
+            pos=Camera.xyz+(InverseView*vec4(local.xyz/local.w,1.0)).xyz;
+            vec3 eye=Camera.xyz+InverseView[3].xyz;
+            vec3 incoming=normalize(pos-eye);
+            normal=normalize(normalDepth.xyz);
+            if(dot(normal,incoming)>0.0) normal=-normal;
+            float visibility=sunVisibility(pos,normal);
+            if(visibility>0.0) visibility*=actorSunVisibility(pos+normal*.035,normalize(Sun.xyz));
+            float diffuse=max(dot(normal,normalize(Sun.xyz)),0.0);
+            lighting=vec4(vec3(max(Options.x,0.0)+diffuse*max(Sun.w,0.0)*visibility),visibility);
+            // Matches the terrain shader, which fades the unshadowed lightmap term out over the same range.
+            float lightRange=1.0-smoothstep(16.0,24.0,length(pos-eye));
+            if(lightInfo.x>0u && lightRange>0.0) lighting.rgb+=tracedBlockLight(pos,normal)*lightRange;
+            if(Options.y>0.0) {
+                open=0.0;
+                for(int j=0;j<4;j++) {
+                    vec3 bounce=marineDiffuseDirection(normal,j,p);
+                    Hit secondary=trace(pos+normal*.035,bounce,12.0);
+                    // Local occlusion: geometry within six blocks darkens ambient light.
+                    open+=secondary.found?clamp(secondary.distance/6.0,0.0,1.0):1.0;
+                    if(secondary.found) {
+                        vec3 secondaryPos=pos+normal*.035+bounce*secondary.distance;
+                        vec3 secondaryNormal=hitNormal(secondary,bounce);
+                        // Direct sun and emission only: the flat sky ambient on every hit lit enclosed
+                        // caves as if under open sky (sky light arrives through the miss rays below).
+                        // Near emitters are already traced lights with shadows (SurfaceLights); their emission in
+                        // these four fixed-direction rays stamped copies of lanterns, campfires and held torches on walls.
+                        float emissionWeight=lightInfo.x>0u?smoothstep(2.0,6.0,secondary.distance):1.0;
+                        diffuseBounce+=linearBounceSurface(secondary)*(sunIrradiance(secondaryPos,secondaryNormal)-vec3(max(Options.x,0.0))
+                            +vec3(marineFetchTriangle(secondary.instance,secondary.primitive).uv2.w*.45*emissionWeight));
+                    } else diffuseBounce+=vec3(.10,.15,.22)*(max(Options.x,0.0)/.45);
+                }
+                diffuseBounce*=Options.y*.25;
+            }
+            int materialClass=int(floor(albedoMaterial.a+.001));
+            // Ordinary opaque materials do not consume reflection outputs.
+            if(materialClass==2 || materialClass==3 || materialClass==4 || materialClass==5 || materialClass==6 || materialClass==8 || materialClass==9) {
+                vec3 reflected=normalize(reflect(incoming,normal));
+                Hit reflectedHit=trace(pos+normal*.035,reflected,96.0);
+                ActorHit actorHit=traceActors(pos+normal*.035,reflected,reflectedHit.distance);
+                if(actorHit.found) {
+                    vec3 hitPos=pos+normal*.035+reflected*actorHit.distance;
+                    reflection=vec4(actorHit.albedo*sunIrradiance(hitPos,actorHit.normal),1);
+                } else if(reflectedHit.found) {
+                    vec3 hitPos=pos+normal*.035+reflected*reflectedHit.distance;
+                    vec3 n=hitNormal(reflectedHit,reflected);
+                    vec3 emission=vec3(marineFetchTriangle(reflectedHit.instance,reflectedHit.primitive).uv2.w*.45);
+                    reflection=vec4(linearSurface(reflectedHit)*(sunIrradiance(hitPos,n)+emission),1);
+                }
             }
         }
     }
+    // Spatial bounce filter inside the 8x8 group: a 5x5 window (shifted to stay inside the
+    // tile) always spans all 16 direction rotations. Only same-plane neighbours contribute.
+    uint slot=gl_LocalInvocationID.y*8u+gl_LocalInvocationID.x;
+    bounceShared[slot]=vec4(diffuseBounce,surface?1.0:0.0);
+    planeShared[slot]=vec4(normal,dot(normal,pos));
+    openShared[slot]=open*.25;
+    barrier();
+    if(surface && Options.y>0.0) {
+        ivec2 lo=clamp(ivec2(gl_LocalInvocationID.xy)-2,ivec2(0),ivec2(3));
+        float distance=length(pos-(Camera.xyz+InverseView[3].xyz));
+        float planeTolerance=max(.04,distance*.004);
+        vec4 sum=vec4(0);float openSum=0.0;
+        for(int y=0;y<5;y++) for(int x=0;x<5;x++) {
+            uint other=uint(lo.y+y)*8u+uint(lo.x+x);
+            vec4 sample_=bounceShared[other];vec4 plane=planeShared[other];
+            if(sample_.w<.5 || dot(plane.xyz,normal)<.9 || abs(plane.w-dot(normal,pos))>planeTolerance) continue;
+            sum+=vec4(sample_.rgb,1);openSum+=openShared[other];
+        }
+        lighting.rgb+=sum.w>0.0?sum.rgb/sum.w:diffuseBounce;
+        extra.x=sum.w>0.0?openSum/sum.w:open*.25;
+    }
+    if(!inside) return;
     pixels[i*2]=packHalf2x16(lighting.xy);pixels[i*2+1]=packHalf2x16(lighting.zw);
     uint reflectionBase=(count*2+3)&~3u;
     pixels[reflectionBase+i*2]=packHalf2x16(reflection.xy);
     pixels[reflectionBase+i*2+1]=packHalf2x16(reflection.zw);
+    uint extraBase=reflectionBase*2u;
+    pixels[extraBase+i*2]=packHalf2x16(extra.xy);
+    pixels[extraBase+i*2+1]=packHalf2x16(extra.zw);
 }

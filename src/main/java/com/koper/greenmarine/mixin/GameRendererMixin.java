@@ -19,6 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class GameRendererMixin {
     @Inject(method = "render3dHud", at = @At("HEAD"))
     private void greenmarine$render(CallbackInfo ci) {
+        com.koper.greenmarine.client.world.WorldPrograms.renderDistant((GameRenderer)(Object)this);
         com.koper.greenmarine.client.world.WorldPrograms.finishWorld();
         com.koper.greenmarine.client.ShaderRuntime.frameStatus();
         com.koper.greenmarine.api.render.MarineRenderer.render(com.koper.greenmarine.api.render.MarineRenderer.Stage.BEFORE_LIGHTING, (GameRenderer)(Object)this);
