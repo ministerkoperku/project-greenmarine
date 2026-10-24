@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "com.koper.greenmarine.development.probe.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": ["ProbeTickMixin"],
+  "injectors": {"defaultRequire": 1}
+}

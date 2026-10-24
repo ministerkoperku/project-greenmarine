@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "id": "greenmarine_development",
+  "version": "${version}",
+  "name": "GreenMarine Development Tools",
+  "description": "Optional in-game shader and material authoring tools. Requires ordinary GreenMarine.",
+  "authors": ["Koper"],
+  "environment": "client",
+  "entrypoints": {"client": ["com.koper.greenmarine.development.DevelopmentClient"]},
+  "mixins": ["greenmarine-development.mixins.json"],
+  "depends": {"fabricloader": ">=0.19.5", "minecraft": "26.3", "java": ">=25", "greenmarine": ">=0.9.10-prototype"}
+}

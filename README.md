@@ -1,3 +1,20 @@
+# GreenMarine — development branch
+
+> **Development tools branch. Do not merge `main-development` into `main`.**
+> This branch adds the optional [GreenMarine Development Tools addon](development-tools/README.md).
+> Normal GreenMarine uses the same renderer. The addon owns the editor, compilers
+> and diagnostic UI; installing only ordinary GreenMarine does not load them.
+>
+> Shared renderer fixes belong on `main` first, then merge `main` **into**
+> `main-development`. Keep addon changes under `development-tools/`; never use a
+> blanket development-to-main merge to publish a renderer fix. Extract and review
+> the isolated common fix when necessary. Development tools have their own jar,
+> mod ID and version. Do not install two GreenMarine renderer jars together.
+>
+> This work started with local0.9.10 material changes preserved as commit0efb967.
+> That common baseline is not on remote main yet; branch history is not claimed
+> to be synchronized until those common changes are separately reviewed/published.
+
 # GreenMarine
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/AMFGEJ7JAG)

@@ -1,0 +1,69 @@
+plugins { id 'net.fabricmc.fabric-loom' version '1.18.2' }
+version = project.mod_version
+group = 'com.koper.greenmarine'
+base { archivesName = 'greenmarine-development-tools' }
+repositories { mavenCentral() }
+def developmentProbe = providers.gradleProperty('developmentProbe').isPresent()
+if (developmentProbe) {
+    sourceSets {
+        probe {
+            java.setSrcDirs(['src/probe/java'])
+            resources.setSrcDirs(['src/probe/resources'])
+            compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+            runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+        }
+    }
+}
+def greenmarineJar = providers.gradleProperty('greenmarineJar').map { file(it) }
+    .getOrElse(file('../build/libs/greenmarine-0.9.10-prototype.jar'))
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    compileOnly files(greenmarineJar)
+    testImplementation files(greenmarineJar)
+    testImplementation platform('org.junit:junit-bom:5.12.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(25) }
+    withSourcesJar()
+}
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+tasks.named('test') {
+    useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED'
+    if (providers.gradleProperty('developmentGpuTest').isPresent()) systemProperty 'greenmarine.development.gpu', 'true'
+}
+tasks.register('irisConverterDistribution', Zip) {
+    dependsOn tasks.named('jar')
+    archiveFileName = "greenmarine-iris-converter-${project.version}-${System.getProperty('os.arch')}.zip"
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(tasks.named('jar')) { into 'lib' }
+    from(greenmarineJar) { into 'lib' }
+    from({ configurations.runtimeClasspath.files.findAll { it.name ==~ /lwjgl(-shaderc)?-[0-9].*\.jar/ } }) { into 'lib' }
+    from('tools/iris-import.sh')
+    from('IRIS-IMPORT.md')
+    from('CONVERTER-README.txt') { rename { 'README.txt' } }
+    from('../LICENSE')
+}
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') { expand version: project.version }
+}
+loom {
+    mods {
+        greenmarine_development { sourceSet sourceSets.main }
+        if (developmentProbe) greenmarine_development_probe { sourceSet sourceSets.probe }
+    }
+    runs {
+        client {
+            programArgs '--graphicsBackend', 'vulkan', '--width', '960', '--height', '540'
+            runDir providers.gradleProperty('probeRunDir').getOrElse('run')
+            if (developmentProbe) {
+                source sourceSets.probe
+                vmArg '-Dgreenmarine.development.probe.output=' + providers.gradleProperty('probeOutput').getOrElse('probe-output')
+            }
+            vmArg '--enable-native-access=ALL-UNNAMED'
+        }
+    }
+}
