@@ -14,7 +14,9 @@ public final class IrisImporter {
     public record Report(boolean runnable, int sourceFiles, List<String> diagnostics, Path destination) {
         public Report { diagnostics = List.copyOf(diagnostics); }
     }
-    private static final int MAX_FILES = 2048, MAX_BYTES = 8 * 1024 * 1024, MAX_TEXT = 256 * 1024;
+    // real packs ship 20 MB moon textures; the snapshot only lives during one import
+    private static final int MAX_FILES = 8192, MAX_TEXT = 256 * 1024;
+    static int maxBytes = 256 * 1024 * 1024; // tests lower it instead of allocating 256 MiB
     private static final Pattern INCLUDE = Pattern.compile("(?m)^\\h*#include\\h+[\"<]([^\">\\r\\n]+)[\">]\\h*(?://[^\\r\\n]*)?$");
     private static final String FRAGMENT = "assets/iris_imported/shaders/core/converted.fsh";
     private IrisImporter() {}
@@ -47,6 +49,8 @@ public final class IrisImporter {
         }
         boolean runnable = translated != null && problems.isEmpty();
         diagnostics.addAll(problems);
+        String coverage = coverage(snapshot);
+        if (coverage != null) diagnostics.add(coverage);
         if (runnable) diagnostics.add("Only the single fullscreen effect is translated. Host scene/depth data and color conventions may differ from Iris.");
         else diagnostics.add("Manual conversion required. No selectable GreenMarine pack manifest was generated.");
         createDirectories(output.getParent()); checkAncestors(output.getParent());
@@ -70,6 +74,14 @@ public final class IrisImporter {
             Files.move(staging, output, StandardCopyOption.ATOMIC_MOVE);
             return new Report(runnable, snapshot.size(), diagnostics, output);
         } finally { deleteTree(staging); }
+    }
+    /** Full-pack IR-1 numbers: what the future Iris runtime can already compile. Never blocks the import. */
+    private static String coverage(Map<String, byte[]> snapshot) {
+        try {
+            var results = com.koper.greenmarine.development.iris.IrisCoverage.run(com.koper.greenmarine.development.iris.IrisSources.of(snapshot), null);
+            return "## Iris runtime readiness (IR-1)\n\n```\n" + com.koper.greenmarine.development.iris.IrisCoverage.report(results) + "```\n"
+                + "IR-1 means translated to Vulkan GLSL and compiled; it does not mean the program renders yet.";
+        } catch (Exception | LinkageError e) { return "IR-1 coverage unavailable: " + e.getMessage(); }
     }
     private static Map<String, byte[]> snapshot(Path input) throws IOException {
         var files = new LinkedHashMap<String, byte[]>(); int[] total = {0};
@@ -103,10 +115,10 @@ public final class IrisImporter {
         return files;
     }
     private static void add(Map<String,byte[]> files, int[] total, String name, InputStream stream) throws IOException {
-        if (files.size() >= MAX_FILES) throw new IOException("Iris snapshot exceeds 2048 files");
-        byte[] bytes = stream.readNBytes(MAX_BYTES - total[0] + 1);
+        if (files.size() >= MAX_FILES) throw new IOException("Iris snapshot exceeds 8192 files");
+        byte[] bytes = stream.readNBytes(maxBytes - total[0] + 1);
         total[0] += bytes.length;
-        if (total[0] > MAX_BYTES) throw new IOException("Iris snapshot exceeds 8 MiB uncompressed");
+        if (total[0] > maxBytes) throw new IOException("Iris snapshot exceeds " + (maxBytes >> 20) + " MiB uncompressed");
         files.put(name, bytes);
     }
     private static String safeName(String name) throws IOException {
@@ -120,7 +132,7 @@ public final class IrisImporter {
     /** ZipFile does not expose Unix mode bits; inspect central entries before extracting any bytes. */
     private static void checkZip(Path input) throws IOException {
         long size = Files.size(input);
-        if (size > 32L * 1024 * 1024 || size < 22) throw new IOException("ZIP size is invalid or exceeds 32 MiB compressed limit");
+        if (size > 256L * 1024 * 1024 || size < 22) throw new IOException("ZIP size is invalid or exceeds 256 MiB compressed limit");
         try (var file = new RandomAccessFile(input.toFile(), "r")) {
             int tailSize = (int)Math.min(size, 65557); byte[] tail = new byte[tailSize];
             file.seek(size - tailSize); file.readFully(tail); var words = ByteBuffer.wrap(tail).order(ByteOrder.LITTLE_ENDIAN);
@@ -129,7 +141,7 @@ public final class IrisImporter {
             if (end < 0 || words.getShort(end + 4) != 0 || words.getShort(end + 6) != 0) throw new IOException("Unsupported ZIP directory");
             int count = Short.toUnsignedInt(words.getShort(end + 10));
             long length = Integer.toUnsignedLong(words.getInt(end + 12)), offset = Integer.toUnsignedLong(words.getInt(end + 16));
-            if (count > 4096 || length > 2 * 1024 * 1024 || offset + length > size - tailSize + end || offset == 0xffffffffL)
+            if (count > 8192 || length > 8 * 1024 * 1024 || offset + length > size - tailSize + end || offset == 0xffffffffL)
                 throw new IOException("ZIP64, oversized or invalid ZIP directory is unsupported");
             byte[] directory = new byte[(int)length]; file.seek(offset); file.readFully(directory);
             var central = ByteBuffer.wrap(directory).order(ByteOrder.LITTLE_ENDIAN); int at = 0;

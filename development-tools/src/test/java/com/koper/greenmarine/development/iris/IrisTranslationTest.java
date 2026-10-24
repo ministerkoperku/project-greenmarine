@@ -78,4 +78,13 @@ class IrisTranslationTest {
         var failing = results.stream().filter(r -> !r.optional() && !r.success()).toList();
         assertTrue(failing.isEmpty(), IrisCoverage.report(results));
     }
+
+    @Test void importerReportsWholePackReadinessWhenConfigured() throws Exception {
+        String pack = System.getProperty("greenmarine.iris.pack");
+        org.junit.jupiter.api.Assumptions.assumeTrue(pack != null && !pack.isBlank());
+        var report = com.koper.greenmarine.development.IrisImporter.convert(Path.of(pack), temp.resolve("workspace/eclipse-import"));
+        String text = Files.readString(report.destination().resolve("IMPORT-REPORT.md"));
+        assertTrue(text.contains("IR-1 translate+compile: 250/250"), text);
+        assertTrue(Files.isRegularFile(report.destination().resolve("iris-source/shaders/shaders.properties")));
+    }
 }

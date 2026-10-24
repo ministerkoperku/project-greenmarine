@@ -51,6 +51,20 @@ public final class IrisSources {
         text.put(name, new String(data, StandardCharsets.UTF_8));
     }
 
+    /** In-memory snapshot (importer); keys are pack-relative, the {@code shaders/} folder is located the same way as in ZIPs. */
+    public static IrisSources of(Map<String, byte[]> files) throws IOException {
+        String prefix = files.keySet().stream().filter(n -> n.endsWith("shaders/shaders.properties") || n.contains("shaders/world0/") || n.endsWith("shaders/final.fsh"))
+            .map(n -> n.substring(0, n.indexOf("shaders/") + 8)).findFirst().orElse("shaders/");
+        var text = new TreeMap<String, String>(); var binary = new TreeMap<String, Long>();
+        for (var entry : files.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) continue;
+            byte[] data = entry.getValue();
+            add(entry.getKey().substring(prefix.length()), data.length, () -> data, text, binary);
+        }
+        if (text.keySet().stream().noneMatch(n -> n.endsWith(".fsh") || n.endsWith(".csh"))) throw new IOException("No Iris programs found");
+        return new IrisSources(Collections.unmodifiableMap(text), Collections.unmodifiableMap(binary));
+    }
+
     public Optional<String> text(String path) { return Optional.ofNullable(text.get(path)); }
     public Set<String> textPaths() { return text.keySet(); }
     public Map<String, Long> binaries() { return binary; }

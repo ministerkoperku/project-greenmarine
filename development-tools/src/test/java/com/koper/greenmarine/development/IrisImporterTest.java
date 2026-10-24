@@ -79,12 +79,15 @@ class IrisImporterTest {
     }
     @Test void enforcesUncompressedSizeAndFileCountLimits() throws Exception {
         var many=new LinkedHashMap<String,String>(); many.put("shaders/final.fsh",LEGACY);
-        for(int i=0;i<2048;i++) many.put("shaders/lib/"+i+".glsl","");
+        for(int i=0;i<8192;i++) many.put("shaders/lib/"+i+".glsl","");
         Path tooMany=zip("many.zip",many), tooLarge=zip("large.zip",Map.of("shaders/final.fsh","x".repeat(8*1024*1024+1)));
-        for(Path source:List.of(tooMany,tooLarge)) {
-            Path destination=temp.resolve(source.getFileName()+"-converted");
-            assertThrows(IOException.class,()->IrisImporter.convert(source,destination)); assertFalse(Files.exists(destination));
-        }
+        int limit=IrisImporter.maxBytes;IrisImporter.maxBytes=8*1024*1024;
+        try {
+            for(Path source:List.of(tooMany,tooLarge)) {
+                Path destination=temp.resolve(source.getFileName()+"-converted");
+                assertThrows(IOException.class,()->IrisImporter.convert(source,destination)); assertFalse(Files.exists(destination));
+            }
+        } finally {IrisImporter.maxBytes=limit;}
     }
     @Test void missingShaderRootLeavesNoImportOrStagingFiles() throws Exception {
         Path source=directory("no-shaders",Map.of("readme.txt","empty")), workspace=Files.createDirectory(temp.resolve("workspace"));
