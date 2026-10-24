@@ -106,6 +106,11 @@ public final class GraphExecution extends OwnedResource {
             return textures.get(name);
         }
         public Material material(ProgramHandle program) { check(); return new Material(this, program); }
+        GpuTextureView storageAccess(String resource) {
+            check();
+            if (declaration.writes().contains(resource)) return textures.get(resource);
+            return read(resource);
+        }
         /** Storage image view of a declared write; the texture must be a graph {@code storageTexture}. */
         public GpuTextureView storage(String resource) { return write(resource); }
         /**

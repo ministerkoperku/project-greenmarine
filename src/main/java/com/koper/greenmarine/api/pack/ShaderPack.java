@@ -40,6 +40,8 @@ public record ShaderPack(String id, String name, String script, List<PackParamet
             if (!names.add(pass.name())) throw new IllegalArgumentException("Duplicate pass name");
             if(resources.images().containsKey(pass.name()) || resources.buffers().containsKey(pass.name()))
                 throw new IllegalArgumentException("Pass and resource share a name: "+pass.name());
+            for(var sampler:pass.inputs().keySet()) if(resources.images().containsKey(sampler) || resources.buffers().containsKey(sampler))
+                throw new IllegalArgumentException("Input sampler "+sampler+" of "+pass.name()+" shadows a pack resource; pick another sampler name");
             for(var producer:pass.inputs().values()) if(!earlierScenes.contains(producer) && !resources.images().containsKey(producer))
                 throw new IllegalArgumentException("Input for "+pass.name()+" requires an earlier scene pass or pack image: "+producer);
             if(pass.groups()!=null && pass.groups().startsWith("image:") && !resources.images().containsKey(pass.groups().substring(6)))

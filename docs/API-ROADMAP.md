@@ -29,7 +29,7 @@ count as done; "done" always means verified on the host backend, not only expose
 | Priority | Item | Gap and acceptance |
 | --- | --- | --- |
 | P0 | Capability contract | Report compute, storage, formats, limits and *initialized* paths (not just advertised features) through one versioned, source-compatible query. |
-| P0 | Compute API | Base in place (see above). Remaining: storage buffers/images in raster stages, dispatch batching under one barrier pair, indirect dispatch/draw, Adreno and desktop verification. |
+| P0 | Compute API | Base in place (see above). Raster storage reads/writes in place. Remaining: dispatch batching under one barrier pair, indirect dispatch/draw, Adreno and desktop verification. |
 | P0 | Texture resources | Mip levels, layers, cube/3D textures, uploads and sampler control where the host supports them, with subresource hazard validation. |
 | P0 | Material contract | Albedo, normal, roughness, metalness, emission and motion inputs with PBR texture conventions; today's capture covers terrain and registered external renderers only. |
 | P0 | Entity shading in packs | Solstice entity/block programs so host-rendered entities and block entities match terrain lighting; gameplay-tested variants, not routing alone. |

@@ -120,13 +120,31 @@ void main() {
 }
 ```
 
-### Sampling compute results in fragment passes
+### Using compute results in fragment passes
 
-A scene pass lists pack images in `inputs`, the same way it names earlier pass
-outputs: `"inputs": {"ExposureTex": "Exposure"}` and `uniform sampler2D ExposureTex;`.
-Storage buffers are **not** visible to fragment passes yet. To hand scalar results to
-the fragment stage, write them to a small image (for example a 1×1 `r32f`). See
-"Not yet" below.
+Scene passes see pack resources two ways:
+
+- **Directly as storage (Vulkan):** declare `buffer <Name> { ... }` or
+  `layout(<fmt>) uniform image2D <Name>` with the resource's own name and it is
+  bound, no `inputs` entry needed. Reads always work; writes and atomics
+  (`atomicAdd` into a counter, scattering into an image) need
+  `fragmentStorageWrites` (see capabilities), which GreenMarine requests from the
+  device as an optional feature.
+- **Filtered sampling:** list the image in `inputs` like an earlier pass output:
+  `"inputs": {"ExposureTex": "Exposure"}` and `uniform sampler2D ExposureTex;`.
+  The sampler name must differ from the resource name.
+
+```glsl
+#version 450
+layout(std430) readonly buffer Histogram { uint bins[256]; uint count; float exposure; };
+uniform sampler2D ColorSampler;
+layout(location = 0) in vec2 texCoord;
+layout(location = 0) out vec4 fragColor;
+void main() { fragColor = vec4(texture(ColorSampler, texCoord).rgb * exposure, 1.0); }
+```
+
+Fragment passes that use storage need Vulkan; give them `"requires": "compute"` and
+a fallback so OpenGL keeps working.
 
 ## In Java (`RenderSession`)
 
@@ -153,7 +171,27 @@ session.dispatch(encoder, program.bind()
   image view. Storage images must be declared writes of the pass and sampled textures
   declared reads, so graph ordering stays correct.
 - `MarineRenderer.computeCapabilities()` reports the initialized path, workgroup
-  limits and the formats usable as storage images on this device.
+  limits, the formats usable as storage images on this device and the raster
+  storage flags (`rasterStorageReads`, `fragmentStorageWrites`,
+  `vertexStorageWrites`, `formatlessStorageImages`). Write flags come from features
+  the host device actually enabled.
+
+### Storage in raster programs
+
+Renderpearl's `UniformType` has no storage kinds, so declare a storage buffer as
+`UNIFORM_BUFFER` and a storage image as `COMBINED_IMAGE_SAMPLER` in the
+`BindGroupLayout`, then mark them on the program:
+
+```java
+var program = session.compile(new ShaderProgram(pipeline, sources, Map.of(), Map.of())
+    .withStorage(Map.of("Cells", ShaderProgram.Storage.BUFFER, "Painted", ShaderProgram.Storage.IMAGE)));
+ctx.draw(ctx.material(program).storageBuffer("Cells", cells).storageImage("Painted", "painted"), List.of("out"), null, null, true);
+```
+
+GreenMarine's mixins then make those bindings real storage descriptors (reflection
+type check, set layout, descriptor push). `storageImage` takes a graph storage
+texture; it is read-only unless the pass declares the texture as a write. A pipeline
+location always keeps the same storage names.
 
 Every dispatch is one transient command buffer with a barrier before and after.
 That's correct by construction, but small back-to-back dispatches pay for the full
@@ -161,8 +199,6 @@ barriers. Batching several dispatches between one pair of barriers is planned.
 
 ## Not yet
 
-- Storage buffers and images in **fragment/vertex** passes (needs Renderpearl
-  reflection and layout mixins; next step on the roadmap).
 - 3D images, image arrays, mip chains, push constants and separate samplers.
 - Indirect dispatch and draws fed by compute.
 - Compute in world programs (terrain/entity) and in the lightmap stage.

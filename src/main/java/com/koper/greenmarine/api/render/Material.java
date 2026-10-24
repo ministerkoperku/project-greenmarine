@@ -27,6 +27,7 @@ public final class Material {
     public Material uniform(String name, BufferHandle buffer) {
         context.check(); program.definition().checkBinding(name, UniformType.UNIFORM_BUFFER);
         buffer.requireOwner(context.session().scope);
+        if (program.definition().storage().containsKey(name)) throw new IllegalArgumentException(name + " is a storage buffer; use storageBuffer");
         if ((buffer.buffer().usage() & GpuBuffer.USAGE_UNIFORM) == 0) throw new IllegalArgumentException("Buffer lacks uniform usage");
         bindings.put(name, buffer); return this;
     }
@@ -35,6 +36,23 @@ public final class Material {
         var view = context.read(resource);
         var sampler = com.mojang.blaze3d.systems.RenderSystem.getSamplerCache().getClampToEdge(Objects.requireNonNull(filter));
         bindings.put(name, new Texture(view, sampler)); return this;
+    }
+    /** Storage buffer ({@code buffer} block) from {@link RenderSession#storageBuffer}. */
+    public Material storageBuffer(String name, BufferHandle buffer) {
+        context.check(); requireStorage(name, ShaderProgram.Storage.BUFFER);
+        buffer.requireOwner(context.session().scope);
+        if (!com.koper.greenmarine.client.ComputeBackend.isStorage(buffer.buffer())) throw new IllegalArgumentException(name + " needs a storage buffer");
+        bindings.put(name, buffer); return this;
+    }
+    /** Storage image ({@code image2D}) of a graph storage texture; read-only unless the pass declares it as a write. */
+    public Material storageImage(String name, String resource) {
+        context.check(); requireStorage(name, ShaderProgram.Storage.IMAGE);
+        var view = context.storageAccess(resource);
+        if (!com.koper.greenmarine.client.ComputeBackend.isStorage(view.texture())) throw new IllegalArgumentException(resource + " is not a storage texture");
+        bindings.put(name, new Texture(view, com.mojang.blaze3d.systems.RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST))); return this;
+    }
+    private void requireStorage(String name, ShaderProgram.Storage kind) {
+        if (program.definition().storage().get(name) != kind) throw new IllegalArgumentException(name + " is not declared as storage " + kind);
     }
     void check() {
         context.check(); program.requireOwner(context.session().scope); program.definition().checkComplete(bindings.keySet());

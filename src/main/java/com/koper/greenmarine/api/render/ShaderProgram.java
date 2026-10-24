@@ -12,11 +12,19 @@ public final class ShaderProgram {
     private final Map<Identifier, ShaderBinary> fragments;
     private final Map<Identifier,String> vertexSources;
     private final Map<String, UniformType> bindings;
+    private final Map<String, Storage> storage;
+    /**
+     * Raster storage access. In the BindGroupLayout a storage buffer is declared as
+     * UNIFORM_BUFFER and a storage image as COMBINED_IMAGE_SAMPLER; {@link #withStorage} marks them.
+     * Reads always work on Vulkan; writes/atomics need the matching
+     * {@code MarineRenderer.computeCapabilities()} flag.
+     */
+    public enum Storage { BUFFER, IMAGE }
     public ShaderProgram(RenderPipeline pipeline, Map<Identifier, String> sources,
                          Map<Identifier, String> includes, Map<Identifier, ShaderBinary> fragments) {
-        this(pipeline,sources,includes,fragments,Map.of());
+        this(pipeline,sources,includes,fragments,Map.of(),Map.of());
     }
-    private ShaderProgram(RenderPipeline pipeline,Map<Identifier,String> sources,Map<Identifier,String> includes,Map<Identifier,ShaderBinary> fragments,Map<Identifier,String> vertices) {
+    private ShaderProgram(RenderPipeline pipeline,Map<Identifier,String> sources,Map<Identifier,String> includes,Map<Identifier,ShaderBinary> fragments,Map<Identifier,String> vertices,Map<String,Storage> storage) {
         this.pipeline = Objects.requireNonNull(pipeline);
         this.vertexSources=Map.copyOf(vertices);
         this.sources = Map.copyOf(sources); this.includes = Map.copyOf(includes); this.fragments = Map.copyOf(fragments);
@@ -36,7 +44,19 @@ public final class ShaderProgram {
             if (declarations.putIfAbsent(uniform.name(), uniform.type()) != null) throw new IllegalArgumentException("Duplicate binding: " + uniform.name());
         }
         bindings = Collections.unmodifiableMap(declarations);
+        for (var entry : storage.entrySet()) {
+            var expected = entry.getValue() == Storage.BUFFER ? UniformType.UNIFORM_BUFFER : UniformType.COMBINED_IMAGE_SAMPLER;
+            if (bindings.get(entry.getKey()) != expected)
+                throw new IllegalArgumentException("Storage " + entry.getKey() + " must be declared as " + expected + " in the pipeline layout");
+        }
+        this.storage = Map.copyOf(storage);
     }
+    /** Same sources and pipeline with the given names bound as storage descriptors (Vulkan only). */
+    public ShaderProgram withStorage(Map<String, Storage> names) {
+        var merged = new LinkedHashMap<>(storage); merged.putAll(names);
+        return new ShaderProgram(pipeline, sources, includes, fragments, vertexSources, merged);
+    }
+    public Map<String, Storage> storage() { return storage; }
     /** Reuses a schema-v1 pack snapshot; additional sources normally supply the vertex stage. */
     public static ShaderProgram fromPack(RenderPipeline pipeline, com.koper.greenmarine.api.pack.PackCatalog.LoadedPack pack,
                                          Map<Identifier, String> additionalSources) {
@@ -55,7 +75,7 @@ public final class ShaderProgram {
         var fragment = pipeline.getShaders().get(ShaderType.FRAGMENT);
         if (fragment != null && !additionalSources.containsKey(fragment) && pack.binaries().containsKey(fragment.toString()))
             binaries.put(fragment, pack.binaries().get(fragment.toString()));
-        return new ShaderProgram(pipeline, sources, includes, binaries,vertices);
+        return new ShaderProgram(pipeline, sources, includes, binaries,vertices,Map.of());
     }
     /** Stage-aware lookup also supports matching vertex/fragment resource ids. */
     public String source(Identifier id,ShaderType type) {return type==ShaderType.VERTEX?vertexSources.getOrDefault(id,sources.get(id)):sources.get(id);}

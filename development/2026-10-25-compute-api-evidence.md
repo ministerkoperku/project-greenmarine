@@ -44,12 +44,27 @@ features later.
     = 960 = scene width.
   - 39 storage-capable formats reported on lavapipe.
 
+## Raster storage (same day, second commit)
+
+Finding: the handoff was wrong about reflection. `SpvUtil.DESCRIPTOR_TYPES` is
+{1,2,6,7,10,11}, so Renderpearl already reflects SSBOs (2) and storage images (6).
+They were rejected in three places, now patched by mixins keyed by pipeline location
+(`RasterStorage`): PipelineBuilder's type check (`@Redirect` of `Map.get` to learn the
+name, plus `SpvUtil.resourceType`), `VulkanRenderPipeline.compile` set layout type
+(7/3), and `VulkanRenderPass.pushDescriptors` write type. Sampled images were already
+pushed in GENERAL, so storage images need no transitions. Optional features
+`fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics`, format-less storage
+image read/write are requested next to the RT feature set.
+
+Probe (lavapipe): a raster pass reads the compute-written SSBO and `imageLoad`s the
+compute-written image: 0/256 mismatches; fragment `atomicAdd` counted exactly 256. A pack
+scene pass reads `buffer Counter` + `image2D Lut` and writes `atomicAdd` into the
+pack buffer `Hits`: hits = frames = 60, LUT via imageLoad = via sampler 60/60. All four
+raster storage capability flags are true on lavapipe.
+
 ## Not verified / next
 
 - Adreno (owner's phone) and RX 9070 XT runs; no timing claims (the 28 ms record time
   in the probe includes first graph allocation on lavapipe).
-- Storage buffers/images in raster stages (Renderpearl reflection/layout/push mixins:
-  handoff steps 1-3) — needed for Iris SSBO packs and for fragment passes reading
-  pack buffers directly.
 - Dispatch batching under one barrier pair; indirect dispatch/draw; 3D images, arrays,
   mips; compute in world programs.

@@ -134,6 +134,13 @@ public final class PackCompute {
         var parts = spec.split(",");
         return new int[]{Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2])};
     }
+    /** Pack buffers/images for raster passes; names the shader doesn't declare are ignored by the host. */
+    static void bindRaster(com.mojang.renderpearl.api.commands.RenderPass pass) {
+        if (declared == null) return;
+        BUFFERS.forEach((name, buffer) -> pass.setUniform(name, buffer.slice()));
+        var sampler = RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
+        IMAGES.forEach((name, image) -> pass.setUniform(name, image.view(), sampler));
+    }
     public static long dispatches() { return dispatches; }
 
     private static void closeResources() {

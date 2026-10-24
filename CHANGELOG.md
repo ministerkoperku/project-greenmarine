@@ -3,6 +3,7 @@
 ## 0.9.11-prototype
 
 - Compute API: GreenMarine packs declare persistent `resources` (storage images and buffers) and `"stage":"compute"` passes (`.csh`, `groups`: screen / image / fixed) whose shaders bind resources purely by name; scene passes sample pack images through `inputs`. Java: `RenderSession.compute/storageTexture/storageBuffer/dispatch`, graph `storageTexture` + `PassContext.dispatch`, `MarineRenderer.computeCapabilities()`. Vulkan only, reported only after a pipeline is built on the host device; `"requires":"compute"` selects fallbacks elsewhere. See [compute](docs/COMPUTE.md).
+- Raster storage: fragment/vertex programs read and write storage buffers and images (`ShaderProgram.withStorage`, `Material.storageBuffer/storageImage`); pack scene passes bind pack buffers/images by name. Optional `fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics` and format-less storage image features are requested and reported only when enabled.
 
 ## 0.9.10-prototype
 

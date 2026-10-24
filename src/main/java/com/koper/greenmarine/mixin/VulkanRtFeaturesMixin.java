@@ -13,7 +13,9 @@ import java.util.*;
 public abstract class VulkanRtFeaturesMixin {
     @Inject(method="optionalFeatureSets",at=@At("RETURN"),cancellable=true)
     private static void greenmarine$optionalRt(CallbackInfoReturnable<Set<FeatureSet>> ci) {
-        if(Boolean.getBoolean("greenmarine.native.disable")) return;
-        var features=new HashSet<>(ci.getReturnValue());features.add(RtFeatures.OPTIONAL);ci.setReturnValue(Set.copyOf(features));
+        var features=new HashSet<>(ci.getReturnValue());
+        features.addAll(com.koper.greenmarine.client.StorageFeatures.OPTIONAL);
+        if(!Boolean.getBoolean("greenmarine.native.disable")) features.add(RtFeatures.OPTIONAL);
+        ci.setReturnValue(Set.copyOf(features));
     }
 }

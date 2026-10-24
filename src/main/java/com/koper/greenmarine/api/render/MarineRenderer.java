@@ -58,17 +58,22 @@ public final class MarineRenderer {
     /** Initialized compute/storage path on the host device plus its limits; all false/zero off Vulkan. */
     public record ComputeCapabilities(boolean compute, boolean storageBuffers, boolean storageImages,
                                       int maxInvocations, java.util.List<Integer> maxGroupCount, java.util.List<Integer> maxGroupSize,
-                                      java.util.List<com.mojang.renderpearl.api.GpuFormat> storageFormats) {}
+                                      java.util.List<com.mojang.renderpearl.api.GpuFormat> storageFormats,
+                                      boolean rasterStorageReads, boolean fragmentStorageWrites, boolean vertexStorageWrites, boolean formatlessStorageImages) {}
     public static ComputeCapabilities computeCapabilities() {
         RenderSystem.assertOnRenderThread(); var device = RenderSystem.getDevice();
         var vk = com.koper.greenmarine.client.ComputeBackend.vulkan(device);
         if (vk == null || !com.koper.greenmarine.client.ComputeBackend.initialized(device))
-            return new ComputeCapabilities(false, false, false, 0, List.of(0, 0, 0), List.of(0, 0, 0), List.of());
+            return new ComputeCapabilities(false, false, false, 0, List.of(0, 0, 0), List.of(0, 0, 0), List.of(), false, false, false, false);
+        var enabled = ((com.koper.greenmarine.mixin.VulkanDeviceAccessor) vk).greenmarine$enabledFeatures();
         var limits = com.koper.greenmarine.client.ComputeBackend.limits(vk);
         var formats = java.util.Arrays.stream(com.mojang.renderpearl.api.GpuFormat.values())
             .filter(format -> com.koper.greenmarine.client.ComputeBackend.storageFormat(vk, format)).toList();
         return new ComputeCapabilities(true, true, !formats.isEmpty(), limits.maxInvocations(),
-            java.util.Arrays.stream(limits.maxGroupCount()).boxed().toList(), java.util.Arrays.stream(limits.maxGroupSize()).boxed().toList(), formats);
+            java.util.Arrays.stream(limits.maxGroupCount()).boxed().toList(), java.util.Arrays.stream(limits.maxGroupSize()).boxed().toList(), formats,
+            true, com.koper.greenmarine.client.StorageFeatures.enabled(enabled, com.koper.greenmarine.client.StorageFeatures.FRAGMENT),
+            com.koper.greenmarine.client.StorageFeatures.enabled(enabled, com.koper.greenmarine.client.StorageFeatures.VERTEX),
+            com.koper.greenmarine.client.StorageFeatures.enabled(enabled, com.koper.greenmarine.client.StorageFeatures.FORMATLESS));
     }
     public static void captureProjection(Matrix4f projection) { RenderSystem.assertOnRenderThread(); PROJECTION.set(projection); }
     private static synchronized void cleanupRetired() {

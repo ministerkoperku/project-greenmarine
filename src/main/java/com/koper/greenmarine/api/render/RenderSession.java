@@ -6,6 +6,7 @@ import com.mojang.renderpearl.api.buffers.GpuBuffer;
 import com.mojang.renderpearl.api.commands.CommandEncoder;
 import com.mojang.renderpearl.api.textures.GpuTexture;
 import java.nio.ByteBuffer;
+import java.util.LinkedHashMap;
 import java.util.Objects;
 
 /** A render-thread owner for one mod contribution; factories normally receive this from MarineRenderer. */
@@ -97,6 +98,12 @@ public final class RenderSession implements AutoCloseable {
     public ProgramHandle compile(ShaderProgram definition) {
         scope.check();
         boolean vulkan = device.getDeviceInfo().backendName().equalsIgnoreCase("Vulkan");
+        if (!definition.storage().isEmpty()) {
+            if (!vulkan) throw new UnsupportedOperationException("Raster storage bindings require the Vulkan backend");
+            var kinds = new LinkedHashMap<String, com.koper.greenmarine.client.RasterStorage.Kind>();
+            definition.storage().forEach((name, kind) -> kinds.put(name, com.koper.greenmarine.client.RasterStorage.Kind.valueOf(kind.name())));
+            com.koper.greenmarine.client.RasterStorage.declare(definition.pipeline().getLocation().toString(), kinds);
+        }
         try (var sources = new ProgramSources(definition, vulkan)) {
             var pending = device.compilePipeline(definition.pipeline(), sources, Runnable::run).join();
             var compiled = pending.finishCompile();

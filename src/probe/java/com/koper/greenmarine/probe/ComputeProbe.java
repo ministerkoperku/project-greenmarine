@@ -62,7 +62,7 @@ final class ComputeProbe {
 
     private static PackCatalog.LoadedPack packFixture() {
         var resources = new PackResources(Map.of("Lut", new PackResources.Image(PackResources.Format.RGBA8, 8, 8, 0)),
-            Map.of("Counter", new PackResources.Buffer(16)));
+            Map.of("Counter", new PackResources.Buffer(16), "Hits", new PackResources.Buffer(16)));
         var count = new PackPass("count", PackPass.Stage.COMPUTE, "probe:compute/count", null, PackPass.Requirement.NONE,
             Quality.LOW, 1, null, PackPass.Format.SCENE, false, Map.of(), false, "image:Lut");
         var show = new PackPass("show", PackPass.Stage.SCENE, "probe:compute_show", null, PackPass.Requirement.COMPUTE,
@@ -81,9 +81,14 @@ final class ComputeProbe {
                 imageStore(Lut, p, lutColor(p));
             }
             """;
-        String showSource = HEADER + "uniform sampler2D LutTex;uniform sampler2D ColorSampler;\n"
+        String showSource = "#version 450\nuniform sampler2D LutTex;uniform sampler2D ColorSampler;\n"
+            + "layout(std430) readonly buffer Counter { uint frames; uint width; uint pad0; uint pad1; };\n"
+            + "layout(std430) buffer Hits { uint hits; uint lastFrames; uint lutMatches; uint pad; };\n"
+            + "layout(rgba8) uniform readonly image2D Lut;\n"
             + "layout(location=0) in vec2 texCoord;layout(location=0) out vec4 fragColor;\n"
-            + "void main(){fragColor=texCoord.x<.25&&texCoord.y<.25?texture(LutTex,texCoord*4.):texture(ColorSampler,texCoord);}";
+            + "void main(){ if(all(lessThan(gl_FragCoord.xy, vec2(1.0)))){ atomicAdd(hits,1u); atomicMax(lastFrames,frames);\n"
+            + "  vec4 a=imageLoad(Lut,ivec2(3,5)); vec4 b=texelFetch(LutTex,ivec2(3,5),0); if(all(lessThan(abs(a-b),vec4(1e-3)))) atomicAdd(lutMatches,1u);}\n"
+            + " fragColor=texCoord.x<.25&&texCoord.y<.25?texture(LutTex,texCoord*4.):texture(ColorSampler,texCoord);}";
         return new PackCatalog.LoadedPack(definition, "function update(frame) end", Map.of(
             "compute|probe:compute/count", compute, "include|probe:compute_common.glsl",
             "vec4 lutColor(ivec2 p) { return vec4(vec2(p) / 7.0, 0.5, 1.0); }\n", "probe:compute_show", showSource));
@@ -125,6 +130,26 @@ final class ComputeProbe {
             fragment, HEADER + "uniform sampler2D Inverted;layout(location=0)out vec4 color;void main(){color=texelFetch(Inverted,ivec2(gl_FragCoord.xy),0);}"),
             Map.of(), Map.of()));
         var sampled = session.texture("probe sampled", TextureSpec.fixed(GpuFormat.RGBA8_UNORM, N, N), N, N);
+        var rasterFragment = Identifier.parse("probe:compute_raster_storage");
+        var rasterPipeline = RenderPipeline.builder().withLocation(rasterFragment).withVertexShader(vertex).withFragmentShader(rasterFragment)
+            .withBindGroupLayout(BindGroupLayout.builder().withUniform("Cells", UniformType.UNIFORM_BUFFER)
+                .withUniform("Fragments", UniformType.UNIFORM_BUFFER).withUniform("Painted", UniformType.COMBINED_IMAGE_SAMPLER).build())
+            .withColorTargetState(new ColorTargetState(Optional.empty(), GpuFormat.RGBA8_UNORM, ColorTargetState.WRITE_ALL))
+            .withPrimitiveTopology(PrimitiveTopology.TRIANGLES).withCull(false).build();
+        var raster = session.compile(new ShaderProgram(rasterPipeline, Map.of(
+            vertex, HEADER + "void main(){vec2 p=vec2((gl_VertexIndex<<1)&2,gl_VertexIndex&2);gl_Position=vec4(p*2-1,0,1);}",
+            rasterFragment, "#version 450\nlayout(std430) readonly buffer Cells { uint cells[]; };\n"
+                + "layout(std430) buffer Fragments { uint count; uint matches; uint pad0; uint pad1; };\n"
+                + "layout(rgba8) uniform readonly image2D Painted;\nlayout(location=0) out vec4 color;\n"
+                + "void main(){ ivec2 p=ivec2(gl_FragCoord.xy); vec4 a=unpackUnorm4x8(cells[p.y*16+p.x]); vec4 b=imageLoad(Painted,p);\n"
+                + " atomicAdd(count,1u); if(all(lessThan(abs(a-b),vec4(1e-3)))) atomicAdd(matches,1u); color=vec4(b.rgb*0.5,1.0); }"),
+            Map.of(), Map.of()).withStorage(Map.of("Cells", ShaderProgram.Storage.BUFFER, "Fragments", ShaderProgram.Storage.BUFFER, "Painted", ShaderProgram.Storage.IMAGE)));
+        var fragments = session.storageBuffer("probe fragment counter", 16, 0);
+        var rasterOut = session.texture("probe raster storage out", TextureSpec.fixed(GpuFormat.RGBA8_UNORM, N, N), N, N);
+        var rasterGraph = session.graph(RenderGraph.builder().importTexture("painted").importTexture("out")
+            .pass(new RenderGraph.Pass("raster_storage", Set.of("painted"), Set.of("out"), Set.of(), ctx ->
+                ctx.draw(ctx.material(raster).storageBuffer("Cells", cells).storageBuffer("Fragments", fragments).storageImage("Painted", "painted"),
+                    List.of("out"), null, null, true))).build());
         var graph = session.graph(RenderGraph.builder().importTexture("painted").importTexture("sampled")
             .storageTexture("inverted", TextureSpec.fixed(GpuFormat.RGBA8_UNORM, N, N))
             .pass(new RenderGraph.Pass("invert", Set.of("painted"), Set.of("inverted"), Set.of(), ctx ->
@@ -137,6 +162,9 @@ final class ComputeProbe {
         var readCells = session.buffer("probe readback cells", GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_MAP_READ, ByteBuffer.allocateDirect(N * N * 4));
         var readLut = session.buffer("probe readback lut", GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_MAP_READ, ByteBuffer.allocateDirect(8 * 8 * 4));
         var readCounter = session.buffer("probe readback counter", GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_MAP_READ, ByteBuffer.allocateDirect(16));
+        var readHits = session.buffer("probe readback hits", GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_MAP_READ, ByteBuffer.allocateDirect(16));
+        var readRaster = session.buffer("probe readback raster", GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_MAP_READ, ByteBuffer.allocateDirect(N * N * 4));
+        var readFragments = session.buffer("probe readback fragments", GpuBuffer.USAGE_COPY_DST | GpuBuffer.USAGE_MAP_READ, ByteBuffer.allocateDirect(16));
         var frames = new int[1]; var pending = new AtomicInteger();
         return frame -> {
             frames[0]++;
@@ -146,24 +174,28 @@ final class ComputeProbe {
                 session.dispatch(encoder, fill.bind().buffer("Cells", cells), 4, 4, 1);
                 session.dispatch(encoder, paint.bind().buffer("Cells", cells).image("Painted", painted), 4, 4, 1);
                 graph.execute(frame, Map.of("painted", painted, "sampled", sampled));
+                rasterGraph.execute(frame, Map.of("painted", painted, "out", rasterOut));
                 double cpuMs = (System.nanoTime() - t0) / 1e6;
                 var evidence = new JsonObject();
                 evidence.addProperty("recordCpuMs", cpuMs);
                 evidence.add("bindings", GSON.toJsonTree(List.of(fill.bindings(), paint.bindings(), invert.bindings())));
-                pending.set(3);
-                Runnable check = () -> { if (pending.decrementAndGet() == 0) verifyApi(evidence, readCells, readPainted, readSampled); };
+                pending.set(4);
+                Runnable check = () -> { if (pending.decrementAndGet() == 0) verifyApi(evidence, readCells, readPainted, readSampled, readRaster, readFragments); };
                 encoder.copyToBuffer(cells.buffer().slice(), readCells.buffer().slice());
+                encoder.copyToBuffer(fragments.buffer().slice(), readFragments.buffer().slice());
+                encoder.copyTextureToBuffer(rasterOut.texture(), readRaster.buffer(), 0, check, 0);
                 encoder.copyTextureToBuffer(painted.texture(), readPainted.buffer(), 0, check, 0);
                 encoder.copyTextureToBuffer(sampled.texture(), readSampled.buffer(), 0, check, 0);
                 encoder.submit();
                 check.run();
             }
             if (frames[0] == 60 && pack.get() == null) {
-                var lut = PackCompute.image("Lut"); var counter = PackCompute.buffer("Counter");
-                if (lut == null || counter == null) { pack.set(new IllegalStateException("Pack resources missing; status " + ShaderRuntime.status())); return; }
+                var lut = PackCompute.image("Lut"); var counter = PackCompute.buffer("Counter"); var hits = PackCompute.buffer("Hits");
+                if (lut == null || counter == null || hits == null) { pack.set(new IllegalStateException("Pack resources missing; status " + ShaderRuntime.status())); return; }
                 var encoder = session.device().createCommandEncoder(); var left = new AtomicInteger(2); int sceneWidth = frame.width();
-                Runnable check = () -> { if (left.decrementAndGet() == 0) verifyPack(readLut, readCounter, sceneWidth); };
+                Runnable check = () -> { if (left.decrementAndGet() == 0) verifyPack(readLut, readCounter, readHits, sceneWidth); };
                 encoder.copyToBuffer(counter.slice(), readCounter.buffer().slice());
+                encoder.copyToBuffer(hits.slice(), readHits.buffer().slice());
                 encoder.copyTextureToBuffer(lut.texture(), readLut.buffer(), 0, check, 0);
                 encoder.submit();
                 check.run();
@@ -174,8 +206,20 @@ final class ComputeProbe {
     private static int rgba(float r, float g, float b, float a) {
         return Math.round(r * 255) | Math.round(g * 255) << 8 | Math.round(b * 255) << 16 | Math.round(a * 255) << 24;
     }
-    private static void verifyApi(JsonObject evidence, BufferHandle cells, BufferHandle painted, BufferHandle sampled) {
-        try (var c = cells.buffer().map(true, false); var p = painted.buffer().map(true, false); var s = sampled.buffer().map(true, false)) {
+    private static void verifyApi(JsonObject evidence, BufferHandle cells, BufferHandle painted, BufferHandle sampled, BufferHandle rasterOut, BufferHandle fragmentCounter) {
+        try (var c = cells.buffer().map(true, false); var p = painted.buffer().map(true, false); var s = sampled.buffer().map(true, false);
+             var r = rasterOut.buffer().map(true, false); var f = fragmentCounter.buffer().map(true, false)) {
+            var rd = r.data().order(ByteOrder.LITTLE_ENDIAN); var fd = f.data().order(ByteOrder.LITTLE_ENDIAN);
+            int rasterMismatches = 0;
+            for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) {
+                int e = rgba(x / 15f, y / 15f, .25f, 1);
+                int half = Math.round((e & 0xFF) / 255f * .5f * 255) | Math.round((e >> 8 & 0xFF) / 255f * .5f * 255) << 8 | Math.round((e >> 16 & 0xFF) / 255f * .5f * 255) << 16 | 0xFF << 24;
+                int got = rd.getInt((y * N + x) * 4);
+                for (int k = 0; k < 4; k++) if (Math.abs((got >> 8 * k & 0xFF) - (half >> 8 * k & 0xFF)) > 1) { rasterMismatches++; break; }
+            }
+            evidence.addProperty("rasterStorageMismatches", rasterMismatches);
+            evidence.addProperty("fragmentAtomicCount", fd.getInt(0)); evidence.addProperty("fragmentStorageMatches", fd.getInt(4));
+            if (rasterMismatches != 0 || fd.getInt(0) != N * N || fd.getInt(4) != N * N) { api.set(new IllegalStateException("Raster storage mismatch: " + evidence)); return; }
             var cd = c.data().order(ByteOrder.LITTLE_ENDIAN); var pd = p.data().order(ByteOrder.LITTLE_ENDIAN); var sd = s.data().order(ByteOrder.LITTLE_ENDIAN);
             int mismatches = 0; var first = new JsonArray();
             for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) {
@@ -192,16 +236,18 @@ final class ComputeProbe {
             else api.set(evidence);
         } catch (Throwable error) { api.set(error); }
     }
-    private static void verifyPack(BufferHandle lut, BufferHandle counter, int sceneWidth) {
-        try (var l = lut.buffer().map(true, false); var c = counter.buffer().map(true, false)) {
-            var ld = l.data().order(ByteOrder.LITTLE_ENDIAN); var cd = c.data().order(ByteOrder.LITTLE_ENDIAN);
+    private static void verifyPack(BufferHandle lut, BufferHandle counter, BufferHandle hitsBuffer, int sceneWidth) {
+        try (var l = lut.buffer().map(true, false); var c = counter.buffer().map(true, false); var h = hitsBuffer.buffer().map(true, false)) {
+            var ld = l.data().order(ByteOrder.LITTLE_ENDIAN); var cd = c.data().order(ByteOrder.LITTLE_ENDIAN); var hd = h.data().order(ByteOrder.LITTLE_ENDIAN);
             var evidence = new JsonObject(); int mismatches = 0;
             for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
                 if (ld.getInt((y * 8 + x) * 4) != rgba(x / 7f, y / 7f, .5f, 1)) mismatches++;
             int frames = cd.getInt(0), width = cd.getInt(4);
             evidence.addProperty("lutMismatches", mismatches); evidence.addProperty("counterFrames", frames);
             evidence.addProperty("counterWidth", width); evidence.addProperty("sceneWidth", sceneWidth);
-            if (mismatches != 0 || frames < 2 || width != sceneWidth) pack.set(new IllegalStateException("Pack compute mismatch: " + evidence));
+            int hits = hd.getInt(0), lastFrames = hd.getInt(4), lutMatches = hd.getInt(8);
+            evidence.addProperty("fragmentHits", hits); evidence.addProperty("fragmentSawFrames", lastFrames); evidence.addProperty("fragmentLutMatches", lutMatches);
+            if (mismatches != 0 || frames < 2 || width != sceneWidth || hits < frames - 1 || hits > frames || lastFrames < frames - 1 || lutMatches != hits) pack.set(new IllegalStateException("Pack compute mismatch: " + evidence));
             else pack.set(evidence);
         } catch (Throwable error) { pack.set(error); }
     }

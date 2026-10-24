@@ -19,7 +19,7 @@ import java.util.*;
 
 public final class PackRenderer {
     private record TargetKey(int width, int height, GpuFormat format) {}
-    private record PipelineKey(String fragment, GpuFormat format, boolean history, boolean lightingHistory, List<String> inputs) {}
+    private record PipelineKey(String fragment, GpuFormat format, boolean history, boolean lightingHistory, List<String> inputs, PackResources resources) {}
     private static final Map<TargetKey,TextureTarget[]> TARGETS = new HashMap<>();
     private static final Map<PipelineKey,CompiledRenderPipeline> PIPELINES = new HashMap<>();
     private static final Map<String,TextureTarget> RETAINED = new HashMap<>();
@@ -292,6 +292,7 @@ public final class PackRenderer {
                     pass.setUniform("HistorySceneDepth",history.sceneDepthView,RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
                 }
             }
+            PackCompute.bindRaster(pass);
             for(var binding:namedInputs.entrySet()) pass.setUniform(binding.getKey(),binding.getValue(),RenderSystem.getSamplerCache().getClampToEdge(
                 binding.getValue().texture().getFormat().name().endsWith("_UINT")?FilterMode.NEAREST:FilterMode.LINEAR));
             pass.draw(3,1,0,0);
@@ -313,6 +314,10 @@ public final class PackRenderer {
         return pipelineFor(fragment,format,history,false,inputs);
     }
     static RenderPipeline pipelineFor(String fragment,GpuFormat format,boolean history,boolean lightingHistory,List<String> inputs) {
+        return pipelineFor(fragment,format,history,lightingHistory,inputs,PackResources.NONE);
+    }
+    /** Pack buffers/images join the layout as raster storage; unused names cost nothing (only reflected ones are bound). */
+    static RenderPipeline pipelineFor(String fragment,GpuFormat format,boolean history,boolean lightingHistory,List<String> inputs,PackResources resources) {
         inputs=inputs.stream().sorted().toList();
         var layout=BindGroupLayout.builder().withUniform("MarineFrame",UniformType.UNIFORM_BUFFER)
                 .withUniform("ColorSampler",UniformType.COMBINED_IMAGE_SAMPLER).withUniform("DepthSampler",UniformType.COMBINED_IMAGE_SAMPLER)
@@ -330,16 +335,26 @@ public final class PackRenderer {
         if(lightingHistory) layout.withUniform("HistoryAlbedoMaterial",UniformType.COMBINED_IMAGE_SAMPLER)
             .withUniform("HistorySceneDepth",UniformType.COMBINED_IMAGE_SAMPLER);
         for(var input:inputs) layout.withUniform(input,UniformType.COMBINED_IMAGE_SAMPLER);
-        return RenderPipeline.builder().withLocation(Identifier.fromNamespaceAndPath("greenmarine","pack/"+Integer.toUnsignedString(fragment.hashCode())+"/"+format.ordinal()+(history?"/history":"")+(lightingHistory?"/surfaces":"")+(inputs.isEmpty()?"":"/inputs/"+Integer.toUnsignedString(inputs.hashCode()))))
+        var storage=new LinkedHashMap<String,RasterStorage.Kind>();
+        boolean vulkan=RenderSystem.tryGetDevice()!=null && ComputeBackend.vulkan(RenderSystem.getDevice())!=null;
+        if(vulkan) {
+            for(var name:resources.buffers().keySet()) { layout.withUniform(name,UniformType.UNIFORM_BUFFER); storage.put(name,RasterStorage.Kind.BUFFER); }
+            for(var name:resources.images().keySet()) { layout.withUniform(name,UniformType.COMBINED_IMAGE_SAMPLER); storage.put(name,RasterStorage.Kind.IMAGE); }
+        }
+        var location=Identifier.fromNamespaceAndPath("greenmarine","pack/"+Integer.toUnsignedString(fragment.hashCode())+"/"+format.ordinal()+(history?"/history":"")+(lightingHistory?"/surfaces":"")+(inputs.isEmpty()?"":"/inputs/"+Integer.toUnsignedString(inputs.hashCode()))
+            +(storage.isEmpty()?"":"/storage/"+Integer.toUnsignedString(storage.hashCode())));
+        RasterStorage.declare(location.toString(),storage);
+        return RenderPipeline.builder().withLocation(location)
             .withVertexShader(Identifier.fromNamespaceAndPath("greenmarine","pack/screenquad")).withFragmentShader(Identifier.parse(fragment))
             .withBindGroupLayout(layout.build())
             .withColorTargetState(new ColorTargetState(Optional.empty(),format,ColorTargetState.WRITE_ALL))
             .withPrimitiveTopology(PrimitiveTopology.TRIANGLES).withCull(false).build();
     }
     private static CompiledRenderPipeline compiled(String fragment,GpuFormat format,boolean history,boolean lightingHistory,List<String> inputs) {
-        return PIPELINES.computeIfAbsent(new PipelineKey(fragment,format,history,lightingHistory,inputs), key -> {
+        var resources=ShaderRuntime.active().definition().resources();
+        return PIPELINES.computeIfAbsent(new PipelineKey(fragment,format,history,lightingHistory,inputs,resources), key -> {
             try (var source = new PackShaders(ShaderRuntime.active())) {
-                var pending = RenderSystem.getDevice().compilePipeline(pipelineFor(fragment,format,history,lightingHistory,inputs),source,Runnable::run).join();
+                var pending = RenderSystem.getDevice().compilePipeline(pipelineFor(fragment,format,history,lightingHistory,inputs,resources),source,Runnable::run).join();
                 var compiled = pending.finishCompile();
                 if (compiled == null) throw new IllegalArgumentException("Unable to compile pack shader: "+fragment);
                 return compiled;
