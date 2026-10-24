@@ -89,7 +89,8 @@ def validate(pack):
         if data['id'] in ids:
             raise ValueError(f'Duplicate pack id: {data["id"]}')
         ids.add(data['id'])
-        if len(data.get('parameters', {})) > 32 or len(data.get('passes', [])) > 8:
+        computes = [p for p in data['passes'] if p.get('stage') == 'compute']
+        if len(data.get('parameters', {})) > 32 or len(data['passes']) - len(computes) > 8 or len(computes) > 16:
             raise ValueError(f'{file}: parameter/pass limit exceeded')
         required = []
         for program in data.get('programs', []):
@@ -99,6 +100,11 @@ def validate(pack):
             if program.get('surface'):
                 required.append(('shaders/', program['surface'], '.fsh'))
         for effect in data.get('passes', []):
+            if effect.get('stage') == 'compute':
+                if 'compute' not in effect or 'groups' not in effect:
+                    raise ValueError(f'{file}: compute pass {effect.get("name")} needs compute and groups')
+                required.append(('shaders/', effect['compute'], '.csh'))
+                continue
             required.append(('shaders/', effect['fragment'], '.fsh'))
             if effect.get('fallback'):
                 required.append(('shaders/', effect['fallback'], '.fsh'))

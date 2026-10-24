@@ -162,8 +162,16 @@ public final class PackRenderer {
             var voxelMaterials=VoxelWorld.materials(encoder);
             long pixels = 0;
             var outputs=new HashMap<String,GpuTextureView>();
+            PackCompute.prepare(ShaderRuntime.active().definition().resources(),encoder,main.width,main.height);
             for (var pass : schedule) {
                 var definition=pass.resolved().definition(); PassHistory history=null;
+                if(definition.stage()==PackPass.Stage.COMPUTE) {
+                    var computeInputs=new LinkedHashMap<String,GpuTextureView>();
+                    for(var binding:definition.inputs().entrySet()) computeInputs.put(binding.getKey(),inputView(outputs,binding.getValue()));
+                    PackCompute.dispatch(encoder,ShaderRuntime.active(),definition,frameUniform(encoder,main.width,main.height,camera.viewRotationMatrix),
+                        Map.of("ColorSampler",input,"SceneSampler",main.getColorTextureView(),"DepthSampler",main.getDepthTextureView(),"LightmapSampler",renderer.levelLightmap()),computeInputs);
+                    continue;
+                }
                 if(definition.history()) {
                     history=HISTORIES.computeIfAbsent(definition.name(),name->new PassHistory(name,pass.width(),pass.height(),
                         RenderSchedule.format(definition,main.getColorTexture().getFormat()),main.getColorTexture().getFormat(),main.width,main.height,encoder,definition.lightingHistory(),main.getDepthTexture().getFormat()));
@@ -176,16 +184,13 @@ public final class PackRenderer {
                     last = pair[0].getColorTexture() == input.texture() ? pair[1] : pair[0];
                 }
                 var namedInputs=new LinkedHashMap<String,GpuTextureView>();
-                for(var binding:definition.inputs().entrySet()) {
-                    var producer=outputs.get(binding.getValue());
-                    if(producer==null) throw new IllegalArgumentException("Scene pass output unavailable: "+binding.getValue());
-                    namedInputs.put(binding.getKey(),producer);
-                }
+                for(var binding:definition.inputs().entrySet()) namedInputs.put(binding.getKey(),inputView(outputs,binding.getValue()));
                 draw(encoder,pass.resolved().fragment(),last.getColorTextureView(),input,main.getDepthTextureView(),renderer.levelLightmap(),main.getColorTextureView(),pass.width(),pass.height(),camera.viewRotationMatrix,voxelData,voxelMaterials,history,historyCamera,namedInputs);
                 if(history!=null) historySubmissions.add(new HistorySubmission(history,history.copySurfaces(encoder,surfaceNormals,com.koper.greenmarine.client.world.WorldPrograms.surfaceAlbedo(),main.getDepthTextureView())));
                 if(retainedOutputs.contains(definition.name())) outputs.put(definition.name(),last.getColorTextureView());
                 input = last.getColorTextureView(); pixels += (long)pass.width() * pass.height();
             }
+            if (last == null) throw new IllegalStateException("A shaderpack needs at least one selected scene pass after its compute passes");
             if (RenderSchedule.canCopy(last.width,last.height,last.getColorTexture().getFormat(),main.width,main.height,main.getColorTexture().getFormat())) {
                 encoder.copyTextureToTexture(last.getColorTexture(),main.getColorTexture(),0,0,0,0,0,main.width,main.height);
             } else {
@@ -205,6 +210,20 @@ public final class PackRenderer {
         } catch (RuntimeException | LinkageError error) { fail(error); }
     }
 
+    private static GpuTextureView inputView(Map<String,GpuTextureView> outputs,String producer) {
+        var view=outputs.containsKey(producer)?outputs.get(producer):PackCompute.image(producer);
+        if(view==null) throw new IllegalArgumentException("Scene pass output unavailable: "+producer);
+        return view;
+    }
+    private static com.mojang.renderpearl.api.buffers.GpuBufferSlice frameUniform(CommandEncoder encoder,int width,int height,org.joml.Matrix4fc view) {
+        var client = Minecraft.getInstance();
+        float day = client.level == null ? 0 : Math.floorMod(client.level.getDefaultClockTime(),24000) / 24000f;
+        MarineFrame.write(FRAME,width,height,GreenMarineClient.seconds(client.getDeltaTracker().getGameTimeDeltaPartialTick(false)),day,
+            ShaderRuntime.capabilities().backend().equalsIgnoreCase("Vulkan") || RenderSystem.getDevice().getDeviceInfo().isZZeroToOne(),
+            ShaderRuntime.settings().quality(),ShaderRuntime.rays().effective(),PROJECTION,view,ShaderRuntime.script());
+        FRAME.position(0).limit(MarineFrame.BYTES);
+        return encoder.transientMemory().uploadGpu(FRAME,RenderSystem.getDevice().getDeviceInfo().limits().minUniformOffsetAlignment(),GpuBuffer.USAGE_UNIFORM);
+    }
     private static TextureTarget[] targets(int width,int height,GpuFormat format,GpuFormat fallback) {
         return TARGETS.computeIfAbsent(new TargetKey(width,height,format), key -> {
             var first=target("GreenMarine pack A",width,height,format,fallback);
@@ -234,13 +253,7 @@ public final class PackRenderer {
                              GpuTextureView depth,GpuTextureView lightmapInput,GpuTextureView scene,int width,int height,org.joml.Matrix4fc view,
                              GpuBuffer voxels,GpuTextureView materials,PassHistory history,MarineHistoryFrame.Camera historyCamera,Map<String,GpuTextureView> namedInputs) {
         var compiled = compiled(fragment,output.texture().getFormat(),history!=null,history!=null && history.lightingHistory,namedInputs.keySet().stream().sorted().toList());
-        var client = Minecraft.getInstance();
-        float day = client.level == null ? 0 : Math.floorMod(client.level.getDefaultClockTime(),24000) / 24000f;
-        MarineFrame.write(FRAME,width,height,GreenMarineClient.seconds(client.getDeltaTracker().getGameTimeDeltaPartialTick(false)),day,
-            ShaderRuntime.capabilities().backend().equalsIgnoreCase("Vulkan") || RenderSystem.getDevice().getDeviceInfo().isZZeroToOne(),
-            ShaderRuntime.settings().quality(),ShaderRuntime.rays().effective(),PROJECTION,view,ShaderRuntime.script());
-        FRAME.position(0).limit(MarineFrame.BYTES);
-        var uniform = encoder.transientMemory().uploadGpu(FRAME,RenderSystem.getDevice().getDeviceInfo().limits().minUniformOffsetAlignment(),GpuBuffer.USAGE_UNIFORM);
+        var uniform = frameUniform(encoder,width,height,view);
         var rayData=voxels==null?null:com.koper.greenmarine.client.rt.RayWorld.bindings(encoder);
         var environment=voxels==null?null:com.koper.greenmarine.client.world.WorldPrograms.environmentBindings(encoder);
         var surfaceFrame=voxels==null?null:com.koper.greenmarine.client.world.WorldPrograms.surfaceBindings(encoder);
@@ -279,7 +292,8 @@ public final class PackRenderer {
                     pass.setUniform("HistorySceneDepth",history.sceneDepthView,RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
                 }
             }
-            for(var binding:namedInputs.entrySet()) pass.setUniform(binding.getKey(),binding.getValue(),RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
+            for(var binding:namedInputs.entrySet()) pass.setUniform(binding.getKey(),binding.getValue(),RenderSystem.getSamplerCache().getClampToEdge(
+                binding.getValue().texture().getFormat().name().endsWith("_UINT")?FilterMode.NEAREST:FilterMode.LINEAR));
             pass.draw(3,1,0,0);
         }
     }
@@ -345,7 +359,7 @@ public final class PackRenderer {
     private static void closeRetained() { RETAINED.values().forEach(TextureTarget::destroyBuffers); RETAINED.clear(); retainedOutputs=Set.of(); }
     private static void closeTargets() { closeHistories(); closeRetained(); TARGETS.values().forEach(pair -> { for (var target : pair) target.destroyBuffers(); }); TARGETS.clear(); }
     public static void close() {
-        closeTargets(); PIPELINES.values().forEach(CompiledRenderPipeline::close); PIPELINES.clear();
+        PackCompute.close(); closeTargets(); PIPELINES.values().forEach(CompiledRenderPipeline::close); PIPELINES.clear();
         if (lightmap != null) lightmap.destroyBuffers(); lightmap = null;
         lightmapReady = failed = logged = false; lightmapTick = -1; sceneWidth = sceneHeight = 0;
         sceneFrames = submissionNanos = shadedPixels = 0;

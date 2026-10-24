@@ -19,22 +19,23 @@ public final class RenderSchedule {
     public static List<Pass> scene(ShaderPack pack, Quality quality, RenderCapabilities caps, RayMode rays, int width, int height) {
         if (width <= 0 || height <= 0) return List.of();
         var result = new ArrayList<Pass>();
-        for (var pass : pack.passes()) if (pass.stage() == PackPass.Stage.SCENE) {
+        for (var pass : pack.passes()) if (pass.stage() != PackPass.Stage.LIGHTMAP) {
             RenderPolicy.pass(pass,quality,caps,rays).ifPresent(resolved -> result.add(new Pass(resolved,
                 Math.max(1,(int)Math.ceil(width * pass.scale())), Math.max(1,(int)Math.ceil(height * pass.scale())))));
         }
         var available=new HashSet<String>();
         for(var selected:result) {
             var definition=selected.resolved().definition();
-            for(var producer:definition.inputs().values()) if(!available.contains(producer))
+            for(var producer:definition.inputs().values()) if(!available.contains(producer) && !pack.resources().images().containsKey(producer))
                 throw new IllegalArgumentException("Selected pass "+definition.name()+" requires unavailable scene pass: "+producer);
-            available.add(definition.name());
+            if(definition.stage()==PackPass.Stage.SCENE) available.add(definition.name());
         }
         return List.copyOf(result);
     }
     public static Set<String> retainedOutputs(List<Pass> schedule) {
         var retained=new HashSet<String>();
         for(var pass:schedule) retained.addAll(pass.resolved().definition().inputs().values());
+        // Pack images are persistent resources, not retained pass outputs; harmless if listed since no pass bears their name.
         return Set.copyOf(retained);
     }
 }

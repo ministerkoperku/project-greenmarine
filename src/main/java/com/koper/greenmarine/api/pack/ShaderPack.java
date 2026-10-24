@@ -8,7 +8,10 @@ import java.util.Locale;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-public record ShaderPack(String id, String name, String script, List<PackParameter> parameters, List<PackPass> passes, List<PackProgram> programs, List<String> materialAddons) {
+public record ShaderPack(String id, String name, String script, List<PackParameter> parameters, List<PackPass> passes, List<PackProgram> programs, List<String> materialAddons, PackResources resources) {
+    public ShaderPack(String id,String name,String script,List<PackParameter> parameters,List<PackPass> passes,List<PackProgram> programs,List<String> materialAddons) {
+        this(id,name,script,parameters,passes,programs,materialAddons,PackResources.NONE);
+    }
     public ShaderPack(String id,String name,String script,List<PackParameter> parameters,List<PackPass> passes,List<PackProgram> programs) {
         this(id,name,script,parameters,passes,programs,List.of());
     }
@@ -19,14 +22,15 @@ public record ShaderPack(String id, String name, String script, List<PackParamet
         requireId(id);
         if (name == null || name.isBlank() || name.length() > 80) throw new IllegalArgumentException("Invalid pack name");
         if (script != null) requireId(script);
-        parameters = List.copyOf(parameters); passes = List.copyOf(passes);programs=List.copyOf(programs);materialAddons=List.copyOf(materialAddons);
+        parameters = List.copyOf(parameters); passes = List.copyOf(passes); java.util.Objects.requireNonNull(resources);programs=List.copyOf(programs);materialAddons=List.copyOf(materialAddons);
         if(materialAddons.size()>16)throw new IllegalArgumentException("At most 16 material addons are supported per shaderpack");
         var addonIds=new HashSet<String>();
         for(String addon:materialAddons) {
             requireId(addon);
             if(!addon.endsWith(".json") || !addonIds.add(addon))throw new IllegalArgumentException("Invalid or duplicate material addon resource: "+addon);
         }
-        if (parameters.size() > 32 || passes.size() > 8) throw new IllegalArgumentException("Pack exceeds parameter/pass limit");
+        long computes=passes.stream().filter(p->p.stage()==PackPass.Stage.COMPUTE).count();
+        if (parameters.size() > 32 || passes.size()-computes > 8 || computes > 16) throw new IllegalArgumentException("Pack exceeds parameter/pass limit");
         var names = new HashSet<String>();
         for (var parameter : parameters) if (!names.add(parameter.name())) throw new IllegalArgumentException("Duplicate parameter");
         names.clear();
@@ -34,10 +38,14 @@ public record ShaderPack(String id, String name, String script, List<PackParamet
         var earlierScenes=new HashSet<String>();
         for (var pass : passes) {
             if (!names.add(pass.name())) throw new IllegalArgumentException("Duplicate pass name");
-            for(var producer:pass.inputs().values()) if(!earlierScenes.contains(producer))
-                throw new IllegalArgumentException("Input for "+pass.name()+" requires an earlier scene pass: "+producer);
+            if(resources.images().containsKey(pass.name()) || resources.buffers().containsKey(pass.name()))
+                throw new IllegalArgumentException("Pass and resource share a name: "+pass.name());
+            for(var producer:pass.inputs().values()) if(!earlierScenes.contains(producer) && !resources.images().containsKey(producer))
+                throw new IllegalArgumentException("Input for "+pass.name()+" requires an earlier scene pass or pack image: "+producer);
+            if(pass.groups()!=null && pass.groups().startsWith("image:") && !resources.images().containsKey(pass.groups().substring(6)))
+                throw new IllegalArgumentException("Compute pass "+pass.name()+" sizes by an undeclared image: "+pass.groups());
             if (pass.stage() == PackPass.Stage.LIGHTMAP) lightmaps++;
-            else earlierScenes.add(pass.name());
+            else if (pass.stage() == PackPass.Stage.SCENE) earlierScenes.add(pass.name());
         }
         if (lightmaps > 1) throw new IllegalArgumentException("At most one lightmap pass is supported");
         var targets=new HashSet<PackProgram.Target>();
@@ -67,10 +75,13 @@ public record ShaderPack(String id, String name, String script, List<PackParamet
             var passes = new ArrayList<PackPass>();
             for (var element : json.getAsJsonArray("passes")) {
                 var pass = element.getAsJsonObject();
-                passes.add(new PackPass(pass.get("name").getAsString(), value(pass, "stage", PackPass.Stage.SCENE),
-                    pass.get("fragment").getAsString(), optional(pass, "fallback"),
+                var stage = value(pass, "stage", PackPass.Stage.SCENE);
+                if (stage == PackPass.Stage.COMPUTE ? pass.has("fragment") : pass.has("compute"))
+                    throw new IllegalArgumentException("Compute passes use \"compute\", other passes \"fragment\"");
+                passes.add(new PackPass(pass.get("name").getAsString(), stage,
+                    pass.get(stage == PackPass.Stage.COMPUTE ? "compute" : "fragment").getAsString(), optional(pass, "fallback"),
                     value(pass, "requires", PackPass.Requirement.NONE), value(pass, "minQuality", Quality.LOW),
-                    pass.has("scale") ? pass.get("scale").getAsFloat() : 1, optional(pass, "spirv"),value(pass,"format",PackPass.Format.SCENE),pass.has("history") && pass.get("history").getAsBoolean(),inputs(pass),pass.has("lightingHistory") && pass.get("lightingHistory").getAsBoolean()));
+                    pass.has("scale") ? pass.get("scale").getAsFloat() : 1, optional(pass, "spirv"),value(pass,"format",PackPass.Format.SCENE),pass.has("history") && pass.get("history").getAsBoolean(),inputs(pass),pass.has("lightingHistory") && pass.get("lightingHistory").getAsBoolean(),groups(pass)));
             }
             var programs=new ArrayList<PackProgram>();
             if(json.has("programs")) for(var entry:json.getAsJsonArray("programs")) {
@@ -80,12 +91,40 @@ public record ShaderPack(String id, String name, String script, List<PackParamet
                     program.has("surfaceBeforeTerrain")?program.get("surfaceBeforeTerrain").getAsBoolean():PackProgram.defaultSurfaceBeforeTerrain(program.get("fragment").getAsString(),optional(program,"surface"))));
             }
             return new ShaderPack(id, json.has("name") ? json.get("name").getAsString() : id,
-                optional(json, "script"), parameters, passes,programs,materialAddons(json));
+                optional(json, "script"), parameters, passes,programs,materialAddons(json),resources(json));
         } catch (RuntimeException error) {
             throw new IllegalArgumentException("Invalid GreenMarine shaderpack: " + error.getMessage(), error);
         }
     }
 
+    private static String groups(JsonObject pass) {
+        if (!pass.has("groups")) return null;
+        var value = pass.get("groups");
+        if (value.isJsonArray()) {
+            var array = value.getAsJsonArray();
+            if (array.size() != 3) throw new IllegalArgumentException("groups array needs [x,y,z]");
+            return array.get(0).getAsInt() + "," + array.get(1).getAsInt() + "," + array.get(2).getAsInt();
+        }
+        return value.getAsString();
+    }
+    private static PackResources resources(JsonObject json) {
+        if (!json.has("resources")) return PackResources.NONE;
+        var root = json.getAsJsonObject("resources");
+        for (var key : root.keySet()) if (!key.equals("images") && !key.equals("buffers")) throw new IllegalArgumentException("Unknown resource kind: " + key);
+        var images = new LinkedHashMap<String, PackResources.Image>(); var buffers = new LinkedHashMap<String, PackResources.Buffer>();
+        if (root.has("images")) for (var entry : root.getAsJsonObject("images").entrySet()) {
+            var image = entry.getValue().getAsJsonObject();
+            var format = value(image, "format", PackResources.Format.RGBA16F);
+            if (image.has("size")) {
+                var size = image.getAsJsonArray("size");
+                if (size.size() != 2 || image.has("scale")) throw new IllegalArgumentException("Image " + entry.getKey() + " takes size [w,h] or scale");
+                images.put(entry.getKey(), new PackResources.Image(format, size.get(0).getAsInt(), size.get(1).getAsInt(), 0));
+            } else images.put(entry.getKey(), new PackResources.Image(format, 0, 0, image.has("scale") ? image.get("scale").getAsFloat() : 1));
+        }
+        if (root.has("buffers")) for (var entry : root.getAsJsonObject("buffers").entrySet())
+            buffers.put(entry.getKey(), new PackResources.Buffer(entry.getValue().getAsJsonObject().get("size").getAsInt()));
+        return new PackResources(images, buffers);
+    }
     private static List<String> materialAddons(JsonObject json) {
         if(!json.has("materialAddons"))return List.of();
         var result=new ArrayList<String>();

@@ -118,6 +118,7 @@ public final class RuntimeProbe implements ClientModInitializer {
         if(Boolean.getBoolean("greenmarine.probe.distant")) { DistantProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.near_reflection")) { NearReflectionProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.hardware_rt")) { HardwareRtProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.compute")) { ComputeProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.render_api")) { RenderApiProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.voxel")) { VoxelRuntimeProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.world")) { WorldLightingProbe.tick(client,OUTPUT); return; }

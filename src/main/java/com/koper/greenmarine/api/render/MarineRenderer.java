@@ -55,6 +55,21 @@ public final class MarineRenderer {
         RenderSystem.assertOnRenderThread(); var info = RenderSystem.getDevice().getDeviceInfo();
         return new Capabilities(info.backendName(), info.limits().maxColorAttachments(), info.backendName().equalsIgnoreCase("Vulkan"), true, com.koper.greenmarine.client.rt.RayWorld.available());
     }
+    /** Initialized compute/storage path on the host device plus its limits; all false/zero off Vulkan. */
+    public record ComputeCapabilities(boolean compute, boolean storageBuffers, boolean storageImages,
+                                      int maxInvocations, java.util.List<Integer> maxGroupCount, java.util.List<Integer> maxGroupSize,
+                                      java.util.List<com.mojang.renderpearl.api.GpuFormat> storageFormats) {}
+    public static ComputeCapabilities computeCapabilities() {
+        RenderSystem.assertOnRenderThread(); var device = RenderSystem.getDevice();
+        var vk = com.koper.greenmarine.client.ComputeBackend.vulkan(device);
+        if (vk == null || !com.koper.greenmarine.client.ComputeBackend.initialized(device))
+            return new ComputeCapabilities(false, false, false, 0, List.of(0, 0, 0), List.of(0, 0, 0), List.of());
+        var limits = com.koper.greenmarine.client.ComputeBackend.limits(vk);
+        var formats = java.util.Arrays.stream(com.mojang.renderpearl.api.GpuFormat.values())
+            .filter(format -> com.koper.greenmarine.client.ComputeBackend.storageFormat(vk, format)).toList();
+        return new ComputeCapabilities(true, true, !formats.isEmpty(), limits.maxInvocations(),
+            java.util.Arrays.stream(limits.maxGroupCount()).boxed().toList(), java.util.Arrays.stream(limits.maxGroupSize()).boxed().toList(), formats);
+    }
     public static void captureProjection(Matrix4f projection) { RenderSystem.assertOnRenderThread(); PROJECTION.set(projection); }
     private static synchronized void cleanupRetired() {
         for (var entry : RETIRED) safeReset(entry); RETIRED.clear();

@@ -19,6 +19,7 @@
     "LightmapMixin",
     "PackSpirvMixin",
     "VulkanRtFeaturesMixin",
+    "HostStorageMixin",
     "WorldRenderPassMixin",
     "WorldPipelineRegistryMixin",
     "WorldSubmitMixin",

@@ -67,7 +67,8 @@ public final class ShaderRuntime {
         var gpu = RenderSystem.tryGetDevice();
         String backend = gpu == null ? "Unavailable" : gpu.getDeviceInfo().backendName();
         var engine = GreenMarineClient.engine();
-        return new RenderCapabilities(backend, engine != null && engine.available(), com.koper.greenmarine.client.rt.RayWorld.available(), gpu!=null, backend.equalsIgnoreCase("Vulkan"));
+        return new RenderCapabilities(backend, engine != null && engine.available(), com.koper.greenmarine.client.rt.RayWorld.available(), gpu!=null, backend.equalsIgnoreCase("Vulkan"),
+            gpu!=null && ComputeBackend.initialized(gpu));
     }
     public static RenderPolicy.RaySelection rays() {
         var selected=active!=null?active:ResourcePacks.CATALOG.get(settings.pack()).orElse(null);

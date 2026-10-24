@@ -129,6 +129,7 @@ public final class PackScript implements AutoCloseable {
         capabilities.set("hardware_rt", LuaValue.valueOf(state.capabilities().hardwareRayTracing()));
         capabilities.set("voxel_rt", LuaValue.valueOf(state.capabilities().voxelRayTracing()));
         capabilities.set("spirv", LuaValue.valueOf(state.capabilities().spirv()));
+        capabilities.set("compute", LuaValue.valueOf(state.capabilities().compute()));
         System.arraycopy(authored, 0, staging, 0, values.length);
         long started = System.nanoTime();
         try {

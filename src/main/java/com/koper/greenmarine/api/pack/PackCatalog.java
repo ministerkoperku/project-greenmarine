@@ -44,6 +44,10 @@ public final class PackCatalog {
                 var shaders = new LinkedHashMap<String, String>();
                 var binaries=new LinkedHashMap<String,ShaderBinary>();
                 for (var pass : pack.passes()) {
+                    if (pass.stage() == PackPass.Stage.COMPUTE) {
+                        shaders.put("compute|" + pass.fragment(), require(resources, computeResource(pass.fragment()), 262_144));
+                        continue;
+                    }
                     shaders.put(pass.fragment(), require(resources, shaderResource(pass.fragment()), 262_144));
                     if (pass.fallback() != null) shaders.put(pass.fallback(), require(resources, shaderResource(pass.fallback()), 262_144));
                     if(pass.spirv()!=null) {
@@ -114,6 +118,7 @@ public final class PackCatalog {
         Objects.requireNonNull(pack);
         if(registered.containsKey(pack.definition().id()) || registered.size()>=64) throw new IllegalArgumentException("Duplicate registered pack or registration limit exceeded");
         for(var pass:pack.definition().passes()) {
+            if(pass.stage()==PackPass.Stage.COMPUTE) { if(!pack.sources().containsKey("compute|"+pass.fragment())) throw new IllegalArgumentException("Registered pack compute source is missing"); continue; }
             if(!pack.sources().containsKey(pass.fragment()) || (pass.fallback()!=null && !pack.sources().containsKey(pass.fallback()))) throw new IllegalArgumentException("Registered pack shader source is missing");
         }
         for(var program:pack.definition().programs()) if(!pack.sources().containsKey(program.fragment())
@@ -136,6 +141,8 @@ public final class PackCatalog {
         int colon = shader.indexOf(':');
         return shader.substring(0, colon + 1) + "shaders/" + shader.substring(colon + 1) + ".fsh";
     }
+    /** Compute programs use Iris' extension: {@code assets/<ns>/shaders/<path>.csh}. */
+    public static String computeResource(String shader) { return shaderResource(shader).replaceFirst("\\.fsh$", ".csh"); }
     private static void requireId(String id) { ShaderPack.requireId(id); }
     public synchronized Optional<LoadedPack> get(String id) { return Optional.ofNullable(registered.containsKey(id)?registered.get(id):snapshot.get(id)); }
     public synchronized List<LoadedPack> packs() { var all=new LinkedHashMap<>(snapshot); all.putAll(registered); return List.copyOf(all.values()); }

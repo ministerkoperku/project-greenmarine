@@ -245,6 +245,7 @@ loom {
             if (providers.gradleProperty('torchProbe').isPresent()) vmArg '-Dgreenmarine.probe.torch=true'
             if (providers.gradleProperty('waterProbe').isPresent()) vmArg '-Dgreenmarine.probe.water=true'
             if (providers.gradleProperty('renderApiProbe').isPresent()) vmArg '-Dgreenmarine.probe.render_api=true'
+            if (providers.gradleProperty('computeProbe').isPresent()) vmArg '-Dgreenmarine.probe.compute=true'
             if (providers.gradleProperty('voxelProbe').isPresent()) vmArg '-Dgreenmarine.probe.voxel=true'
             if (providers.gradleProperty('worldLightingProbe').isPresent()) vmArg '-Dgreenmarine.probe.world=true'
             if (providers.gradleProperty('worldRestoreMode').isPresent()) vmArg '-Dgreenmarine.probe.restore_mode=' + providers.gradleProperty('worldRestoreMode').get()

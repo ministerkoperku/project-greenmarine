@@ -96,7 +96,10 @@ inputs. The additive eleven-argument constructor accepts the immutable
 resize, schedule changes and render failure release retained output storage.
 
 
-Optional `requires` is `none`, `vulkan`, `voxel_rt` or `hardware_rt`. A missing
+Packs can also declare persistent storage images/buffers and compute passes; see
+[compute](COMPUTE.md). Compute passes do not count toward the eight raster passes.
+
+Optional `requires` is `none`, `vulkan`, `voxel_rt`, `hardware_rt` or `compute`. A missing
 capability selects the pass's optional `fallback` fragment; without one the
 pass is skipped. Quality below `minQuality` skips it entirely. Every selected
 pack is independently responsible for a coherent fallback chain. A malformed

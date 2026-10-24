@@ -32,8 +32,11 @@ public final class GraphExecution extends OwnedResource {
         textures = new GraphTexturePool<>(graph.allocationPlan());
     }
     private void prepare(FrameContext frame) {
-        textures.prepare(frame.width(), frame.height(), (slot, spec) -> session.texture(
-            "GreenMarine graph slot " + slot, spec, frame.width(), frame.height()));
+        var storageSlots = new HashSet<Integer>();
+        for (var name : graph.storageTextures()) storageSlots.add(graph.allocationPlan().assignments().get(name));
+        textures.prepare(frame.width(), frame.height(), (slot, spec) -> storageSlots.contains(slot)
+            ? session.storageTexture("GreenMarine graph storage " + slot, spec, frame.width(), frame.height())
+            : session.texture("GreenMarine graph slot " + slot, spec, frame.width(), frame.height()));
     }
     public void execute(FrameContext frame) { execute(frame, Map.of()); }
     /** Typed imports belong to this session; frame imports remain borrowed from the host. */
@@ -103,6 +106,26 @@ public final class GraphExecution extends OwnedResource {
             return textures.get(name);
         }
         public Material material(ProgramHandle program) { check(); return new Material(this, program); }
+        /** Storage image view of a declared write; the texture must be a graph {@code storageTexture}. */
+        public GpuTextureView storage(String resource) { return write(resource); }
+        /**
+         * Records a dispatch inside this pass. Every storage image bound must be a declared write and
+         * every sampled texture a declared read of this pass; buffers are the caller's to order.
+         */
+        public void dispatch(ComputeBindings bindings, int groupsX, int groupsY, int groupsZ) {
+            check();
+            Set<com.mojang.renderpearl.api.textures.GpuTexture> reads = new HashSet<>(), writes = new HashSet<>();
+            declaration.reads().forEach(name -> reads.add(textures.get(name).texture()));
+            declaration.writes().forEach(name -> writes.add(textures.get(name).texture()));
+            for (var texture : bindings.writtenImages) if (!writes.contains(texture) && isGraphTexture(texture))
+                throw new IllegalArgumentException("Storage image is not a declared write of " + declaration.id());
+            for (var texture : bindings.sampledImages) if (!reads.contains(texture) && isGraphTexture(texture))
+                throw new IllegalArgumentException("Sampled texture is not a declared read of " + declaration.id());
+            session.dispatch(encoder, bindings, groupsX, groupsY, groupsZ);
+        }
+        private boolean isGraphTexture(com.mojang.renderpearl.api.textures.GpuTexture texture) {
+            return textures.values().stream().anyMatch(view -> view.texture() == texture);
+        }
         public void draw(Material material, List<String> colors, String depth, Mesh mesh, boolean clear) {
             draw(material,colors,depth,mesh,clear,1,0);
         }

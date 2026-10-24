@@ -65,7 +65,7 @@ Press **F6** (or Pause → GreenMarine) and pick a pack. Full guide:
 |---|---|
 | Using the mod | [User guide](docs/README.md), [Solstice RT](docs/SOLSTICE-RT.md), [Android](docs/ANDROID-ZALITH.md), [Sodium](docs/SODIUM.md) |
 | Ray tracing | [Hardware RT](docs/HARDWARE-RT.md), [Player in reflections](docs/ACTOR-REFLECTIONS.md), [Dynamic scenes](docs/DYNAMIC-RAY-SCENES.md) |
-| Writing packs | [Shaderpacks](docs/SHADERPACKS.md), [External packs](docs/EXTERNAL-PACKS.md), [World programs](docs/WORLD-PROGRAMS.md), [Surface rendering](docs/SURFACE-RENDERING.md), [Materials](docs/MATERIAL-EXTENSION.md) |
+| Writing packs | [Shaderpacks](docs/SHADERPACKS.md), [Compute](docs/COMPUTE.md), [External packs](docs/EXTERNAL-PACKS.md), [World programs](docs/WORLD-PROGRAMS.md), [Surface rendering](docs/SURFACE-RENDERING.md), [Materials](docs/MATERIAL-EXTENSION.md) |
 | Mod API | [Rendering API](docs/RENDERING-API.md), [Indexed meshes](docs/INDEXED-MESHES.md), [Graph allocation](docs/GRAPH-ALLOCATION.md), [External renderers](docs/EXTERNAL-RENDERERS.md), [Settings UI](docs/SETTINGS-UI.md) |
 | Project | [Planned features](PLANNED-FEATURES.md), [Development](docs/DEVELOPMENT.md), [Roadmap](docs/API-ROADMAP.md), [Changelog](CHANGELOG.md), [Third-party notices](docs/THIRD-PARTY.md) |
 

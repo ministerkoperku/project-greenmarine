@@ -45,6 +45,7 @@ public final class ShaderProgram {
         var binaries = new LinkedHashMap<Identifier, ShaderBinary>();
         var vertices=new LinkedHashMap<Identifier,String>();
         pack.sources().forEach((key, value) -> {
+            if (key.startsWith("compute|")) return;
             if (key.startsWith("include|")) includes.put(Identifier.parse(key.substring(8)), value);
             else if(key.startsWith("vertex|")) vertices.put(Identifier.parse(key.substring(7)),value);
             else sources.put(Identifier.parse(key), value);

@@ -126,7 +126,7 @@ Select it with `"effect": "demo:aurora"` in `greenmarine.json`.
 - No upscaling (FSR), path tracing or caustics. [LabPBR block maps](LABPBR.md) are supported.
 - First use of a pack compiles pipelines and can hitch briefly.
 
-Mod developers: [rendering API](RENDERING-API.md), [shaderpacks](SHADERPACKS.md),
+Mod developers: [rendering API](RENDERING-API.md), [shaderpacks](SHADERPACKS.md), [compute](COMPUTE.md),
 [world programs](WORLD-PROGRAMS.md), [surface rendering](SURFACE-RENDERING.md),
 [external renderers](EXTERNAL-RENDERERS.md), [roadmap](API-ROADMAP.md).
 

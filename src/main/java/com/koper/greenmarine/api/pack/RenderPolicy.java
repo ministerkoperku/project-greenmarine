@@ -17,7 +17,7 @@ public final class RenderPolicy {
                 return new RaySelection(RayMode.OFF,"Hardware RT unavailable for this pack; world programs use raster lighting");
             return selected;
         }
-        var selection=rays(requested,quality,new RenderCapabilities(caps.backend(),caps.nativeProcessing(),false,caps.voxelRayTracing(),caps.spirv()));
+        var selection=rays(requested,quality,new RenderCapabilities(caps.backend(),caps.nativeProcessing(),false,caps.voxelRayTracing(),caps.spirv(),caps.compute()));
         return requested==RayMode.HARDWARE && selection.effective()==RayMode.VOXEL
             ?new RaySelection(RayMode.VOXEL,"Selected pack uses portable voxel rays; no hardware ray passes declared"):selection;
     }
@@ -40,7 +40,10 @@ public final class RenderPolicy {
             case VULKAN -> caps.vulkan();
             case HARDWARE_RT -> caps.hardwareRayTracing() && rays == RayMode.HARDWARE;
             case VOXEL_RT -> caps.voxelRayTracing() && rays == RayMode.VOXEL;
+            case COMPUTE -> caps.compute();
         };
+        // A compute pass without the compute path has nothing to fall back to.
+        if (pass.stage() == PackPass.Stage.COMPUTE && !caps.compute()) return Optional.empty();
         if (!supported && pass.fallback() == null) return Optional.empty();
         return Optional.of(new ResolvedPass(pass, supported ? pass.fragment() : pass.fallback(), !supported));
     }

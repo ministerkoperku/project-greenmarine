@@ -16,12 +16,14 @@ public final class RenderGraph {
     private final Map<String, TextureSpec> textures;
     private final Set<String> imports;
     private final Set<String> transientTextures;
+    private final Set<String> storageTextures;
     private final List<Pass> passes;
     private final GraphAllocationPlan allocationPlan;
     private RenderGraph(Builder builder) {
         textures = Collections.unmodifiableMap(new LinkedHashMap<>(builder.textures));
         imports = Set.copyOf(builder.imports);
         transientTextures = Set.copyOf(builder.transientTextures);
+        storageTextures = Set.copyOf(builder.storageTextures);
         var byId = new LinkedHashMap<String, Pass>();
         var writers = new HashMap<String, String>();
         for (var p : builder.passes) {
@@ -65,6 +67,8 @@ public final class RenderGraph {
     public Map<String, TextureSpec> textures() { return textures; }
     public Set<String> imports() { return imports; }
     public Set<String> transientTextures() { return transientTextures; }
+    /** Persistent textures that compute passes may bind as storage images (Vulkan only). */
+    public Set<String> storageTextures() { return storageTextures; }
     public List<Pass> passes() { return passes; }
     public GraphAllocationPlan allocationPlan() { return allocationPlan; }
     public static Builder builder() { return new Builder(); }
@@ -72,6 +76,7 @@ public final class RenderGraph {
         private final Map<String, TextureSpec> textures = new LinkedHashMap<>();
         private final Set<String> imports = new LinkedHashSet<>();
         private final Set<String> transientTextures = new LinkedHashSet<>();
+        private final Set<String> storageTextures = new LinkedHashSet<>();
         private final List<Pass> passes = new ArrayList<>();
         public Builder texture(String name, TextureSpec spec) {
             unique(name); textures.put(name, Objects.requireNonNull(spec)); return this;
@@ -79,6 +84,11 @@ public final class RenderGraph {
         /** Opt-in pass-scoped storage: contents may be overwritten after the last declared use. */
         public Builder transientTexture(String name, TextureSpec spec) {
             texture(name, spec); transientTextures.add(name); return this;
+        }
+        /** Dedicated storage (never pooled): compute writes it, raster passes sample or draw into it. */
+        public Builder storageTexture(String name, TextureSpec spec) {
+            if (!spec.format().hasColorAspect() || spec.format().hasDepthAspect()) throw new IllegalArgumentException("Storage textures need a color format");
+            texture(name, spec); storageTextures.add(name); return this;
         }
         public Builder importTexture(String name) { unique(name); imports.add(name); return this; }
         private void unique(String name) {
