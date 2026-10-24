@@ -59,6 +59,28 @@ public final class RayWorld {
     private static Long requestedContent;
     private static final Deque<Submission> SUBMISSIONS=new ArrayDeque<>();
     private static long epoch,serial,generation,submittedGeneration,lastPublishNanos,lastSubmitNanos;
+    private static int surfaceSkipStreak;
+    private static long laggingSince;
+    /**
+     * Diagnostics for the owner's "shadows gone for a second while walking" report: logs once when the
+     * camera nears the edge of the published RT scene (traced shadows fade out there) and once when a
+     * publication catches up, with what held it back.
+     */
+    private static void laggingScene(double x,double y,double z) {
+        if(scene==null)return;
+        double edge=Math.min(Math.min(x-scene.x(),scene.x()+SceneBounds.WIDTH-x),Math.min(z-scene.z(),scene.z()+SceneBounds.WIDTH-z));
+        edge=Math.min(edge,Math.min(y-scene.y(),scene.y()+SceneBounds.HEIGHT-y));
+        if(edge<12 && laggingSince==0) {
+            laggingSince=System.nanoTime();
+            GreenMarine.LOGGER.info("RT scene lagging: camera {} blocks from the published scene edge; pending sections={}, preparing={}, prepared={}, last publish {} ms ago",
+                String.format("%.1f",edge),SCAN.boundsReadyPending(),preparation!=null && preparation.busy(),prepared!=null,
+                lastPublishNanos==0?-1:(System.nanoTime()-lastPublishNanos)/1_000_000);
+        } else if(edge>=16 && laggingSince!=0) {
+            GreenMarine.LOGGER.info("RT scene caught up after {} ms (publish {} ms total so far, prepare {} ms total, busy={})",
+                (System.nanoTime()-laggingSince)/1_000_000,publishNanos/1_000_000,prepareNanos/1_000_000,busyCount);
+            laggingSince=0;
+        }
+    }
     private static long requestedRevision=-1,publishedRevision=-1,packNanos,prepareNanos,publishNanos,busyCount,discarded;
     public static DynamicMetrics dynamicMetrics() {
         return new DynamicMetrics(generation,submittedGeneration,lastPublishNanos,lastSubmitNanos,requestedRevision,publishedRevision,
@@ -118,6 +140,7 @@ public final class RayWorld {
         var bounds=SceneBounds.around((int)Math.floor(camera.x),(int)Math.floor(camera.y),(int)Math.floor(camera.z));
         SCAN.retarget(bounds,camera.x,camera.y,camera.z);
         long started=System.nanoTime();SCAN.step(client,8192,1_000_000);scanNanos+=System.nanoTime()-started;
+        laggingScene(camera.x,camera.y,camera.z);
         if(nativeRt.asyncAvailable()) {
             if(preparation==null)preparation=new ScenePreparation<>();
             if(prepared==null && !preparation.busy() && requestedRevision==SCAN.revision())return;
@@ -306,7 +329,10 @@ public final class RayWorld {
         SURFACE_META.position(0).limit(16);encoder.writeToBuffer(surfaceMetadata.slice(),SURFACE_META);return surfaceMetadata;
     }
     public static void renderSurface(GpuTextureView normalDepth,GpuTextureView material,int viewportWidth,int viewportHeight) {
-        surfaceReady=false;
+        // Cleared up front: any skipped dispatch (busy slots during a scene rebuild, no frame) must hand
+        // the vanilla blob back, or the player stands there with no shadow at all until the next trace.
+        boolean hadPlayerShadow=playerShadowTraced;
+        surfaceReady=false;playerShadowTraced=false;
         if(!available() || surfaceFailed || !frameReady || ShaderRuntime.rays().effective()!=RayMode.HARDWARE)return;
         long started=System.nanoTime();long lease=0;boolean executed=false;GpuFence fence=null;
         try {
@@ -331,7 +357,16 @@ public final class RayWorld {
             if(ShaderRuntime.settings().profiling() && surfaceGpu==null)surfaceGpu=new GpuTimer();
             if(!ShaderRuntime.settings().profiling() && surfaceGpu!=null) {surfaceGpu.close();surfaceGpu=null;}
             FRAME.putFloat(268,indoor()).putFloat(272,w).putFloat(276,h).putFloat(284,volumetricSteps());FRAME.position(0).limit(320);
-            lease=beginSubmission();if(lease<0){surfaceDetail="RT submission slots busy; raster surface fallback";return;}
+            lease=beginSubmission();
+            if(lease<0){
+                surfaceDetail="RT submission slots busy; raster surface fallback";
+                if(++surfaceSkipStreak==30 || hadPlayerShadow && surfaceSkipStreak==1)
+                    GreenMarine.LOGGER.info("Surface RT skipped {} frame(s) in a row: submission slots busy (scene publications={}, pending sections={})",
+                        surfaceSkipStreak,generation,SCAN.boundsReadyPending());
+                return;
+            }
+            if(surfaceSkipStreak>=30)GreenMarine.LOGGER.info("Surface RT resumed after {} skipped frames",surfaceSkipStreak);
+            surfaceSkipStreak=0;
             int measure=surfaceGpu!=null && surfaceFrames>=40?surfaceGpu.begin(encoder):-1;
             var atlas=Minecraft.getInstance().getAtlasManager().getAtlasOrThrow(net.minecraft.data.AtlasIds.BLOCKS).getTextureView();
             externalFrame(Minecraft.getInstance());
@@ -440,6 +475,7 @@ public final class RayWorld {
         pollSubmissions(true);PlayerReflection.close();SCAN.reset();requestedRevision=publishedRevision=-1;requestedContent=null;
         generation=submittedGeneration=lastPublishNanos=lastSubmitNanos=packNanos=prepareNanos=publishNanos=busyCount=discarded=0;
         if(nativeRt!=null && initialized) nativeRt.resetScene();
+        laggingSince=0;surfaceSkipStreak=0;
         scene=null;ready=reported=surfaceReady=surfaceFailed=frameReady=playerShadowTraced=surfaceLightsActive=false;SurfaceLights.reset();surfaceFrames=0;SURFACE_CPU.clear();closeSurfaceTargets();
         if(surfaceMetadata!=null)surfaceMetadata.close();surfaceMetadata=null;if(surfaceGpu!=null)surfaceGpu.close();surfaceGpu=null;surfaceDetail="Surface rays have not submitted";failed=false;frames=scanNanos=buildNanos=0;CPU.clear();closeTargets();
         detail=initialized?"Hardware pipeline initialized; waiting for a world scene":"Hardware RT has not initialized";
