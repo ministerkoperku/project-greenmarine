@@ -69,3 +69,20 @@ Every milestone ends with the number, a test and evidence; no parity claims beyo
   turns on the whole-pack test).
   Honest limits: varying locations still come from shaderc auto-mapping (must be matched
   explicitly before IR-3 links stages), and compiling says nothing about rendering.
+
+## Course correction (2026-10-25)
+
+Renderpearl in 26.3 binds only combined image samplers, uniform buffers and texel
+buffers: no SSBO, storage images or compute. Vanilla 26.3 terrain vertices carry no
+normal, block id or mid-texcoord either, so gbuffers need an extended mesh format in
+vanilla and Sodium. A GreenMarine-native Iris runtime is therefore a native Vulkan
+executor plus meshing changes: many sessions of work.
+
+**Vitrail Shaders** (github.com/avpbynf/Vitrail-Shaders, LGPL-3.0, Modrinth
+`vitrail-shaders`, 0.13.0-beta+mc26.3) already runs unmodified OptiFine/Iris packs on
+the 26.3 Vulkan backend, including SSBO, compute, custom images, shadows and a Sodium
+vertex extension; its compatibility table lists Bliss and Complementary as close to the
+Iris reference. The owner's goal is to play Eclipse or Complementary with optional RT,
+so the plan becomes: play on Vitrail, and make GreenMarine RT an optional addition
+beside it instead of rebuilding Vitrail inside GreenMarine. IR-1 stays as the dev-tools
+readiness report and for converting packs into native GreenMarine packs later.
