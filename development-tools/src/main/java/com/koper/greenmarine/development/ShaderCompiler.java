@@ -38,11 +38,53 @@ public final class ShaderCompiler {
         try {
             if (language == Language.SLANG) return slang(stage, source, slangCompiler);
             String normalized = GLSL_330.matcher(source).replaceAll(match -> match.group(1) + "450");
-            String expanded = expand(normalized, includes == null ? id -> null : includes, new HashSet<>(), new HashSet<>(), 0);
-            return glsl(stage, expanded, name == null || name.isBlank() ? "developer.glsl" : name);
+            String label = name == null || name.isBlank() ? "developer.glsl" : name;
+            var mapped = expandTopLevel(normalized, includes == null ? id -> null : includes);
+            var result = glsl(stage, mapped.text(), label);
+            return new Result(result.success(), remap(result.diagnostics(), label, mapped), result.spirv());
         } catch (IOException | IllegalArgumentException | LinkageError ex) {
             return failure(ex.getClass().getSimpleName() + ": " + ex.getMessage());
         }
+    }
+    /** origin[i] = editor line of expanded line i+1; includes collapse onto their #include line. */
+    private record Mapped(String text, int[] origin, String[] include) {}
+    private static Mapped expandTopLevel(String source, Function<String,String> resolver) {
+        var output = new StringBuilder(); var origin = new ArrayList<Integer>(); var include = new ArrayList<String>();
+        Set<String> active = new HashSet<>(), imported = new HashSet<>();
+        String[] lines = source.split("\n", -1);
+        for (int index = 0; index < lines.length; index++) {
+            String line = lines[index];
+            var matcher = IMPORT.matcher(line.endsWith("\r") ? line.substring(0, line.length() - 1) : line);
+            if (!matcher.matches()) {
+                output.append(line); if (index + 1 < lines.length) output.append('\n');
+                origin.add(index + 1); include.add(null); continue;
+            }
+            String id = matcher.group(1), body = "";
+            if (imported.add(id)) {
+                String included = resolver.apply(id);
+                if (included == null) throw new IllegalArgumentException("Missing import: " + id + " (line " + (index + 1) + ")");
+                if (included.length() > MAX_SOURCE) throw new IllegalArgumentException("Import exceeds source limit: " + id);
+                active.add(id);
+                body = expand(included, resolver, active, imported, 1);
+                active.remove(id);
+            }
+            int count = (int) body.chars().filter(c -> c == '\n').count() + 1;
+            output.append(body).append('\n');
+            for (int k = 0; k < count; k++) { origin.add(index + 1); include.add(id); }
+            if (output.length() > MAX_SOURCE) throw new IllegalArgumentException("Expanded source exceeds 2 MiB limit");
+        }
+        return new Mapped(output.toString(), origin.stream().mapToInt(Integer::intValue).toArray(), include.toArray(String[]::new));
+    }
+    private static String remap(String diagnostics, String label, Mapped mapped) {
+        if (diagnostics == null || diagnostics.isEmpty()) return diagnostics;
+        var matcher = Pattern.compile("(?m)^" + Pattern.quote(label) + ":(\\d+):").matcher(diagnostics);
+        return matcher.replaceAll(match -> {
+            int line = Integer.parseInt(match.group(1));
+            if (line < 1 || line > mapped.origin().length) return java.util.regex.Matcher.quoteReplacement(match.group());
+            String via = mapped.include()[line - 1];
+            String location = label + ":" + mapped.origin()[line - 1] + ":";
+            return java.util.regex.Matcher.quoteReplacement(via == null ? location : location + " [in " + via + "]");
+        });
     }
     private static String expand(String source, Function<String,String> resolver, Set<String> active,
                                  Set<String> imported, int depth) {

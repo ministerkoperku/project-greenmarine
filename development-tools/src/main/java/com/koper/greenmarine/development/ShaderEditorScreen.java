@@ -3,7 +3,6 @@ package com.koper.greenmarine.development;
 import com.koper.greenmarine.client.ShaderRuntime;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.MultiLineEditBox;
 import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -27,8 +26,10 @@ public final class ShaderEditorScreen extends Screen {
     private ShaderCompiler.Result result;
     private ShaderCompiler.Language language;
     private ShaderCompiler.Stage stage;
-    private MultiLineEditBox editor;
-    private Button compile, apply, export;
+    private CodeEditBox editor;
+    private Button compile, apply, export, issue;
+    private List<CompilerDiagnostics.Issue> issues = List.of();
+    private int issueIndex;
     private boolean busy;
     private long generation;
     public ShaderEditorScreen(Screen parent, String path) {
@@ -65,10 +66,11 @@ public final class ShaderEditorScreen extends Screen {
         }).bounds(x + third + gap, 27, third, 20).build());
         compile = addRenderableWidget(Button.builder(Component.literal(busy ? "Compiling..." : path.endsWith(".json") ? "Validate JSON" : "Compile"), b -> compile())
             .bounds(x + 2 * (third + gap), 27, w - 2 * (third + gap), 20).build());
-        editor = addRenderableWidget(MultiLineEditBox.builder().setX(x).setY(51).setShowBackground(true)
-            .build(font, w, Math.max(36, height - 133), Component.literal("Shader source")));
+        editor = addRenderableWidget(new CodeEditBox(font, x, 51, w, Math.max(36, height - 127), Component.literal("Shader source")));
         editor.setCharacterLimit(262144); editor.setValue(text);
         editor.setValueListener(value -> { text = value; invalidate(); });
+        editor.setIssues(CompilerDiagnostics.byLine(issues));
+        issue = addRenderableWidget(Button.builder(Component.empty(), b -> nextIssue()).bounds(x, height - 72, w, 20).build());
         apply = addRenderableWidget(Button.builder(Component.literal("Save + reload"), b -> apply())
             .bounds(x, height - 48, third, 20).build());
         export = addRenderableWidget(Button.builder(Component.literal("Export SPIR-V"), b -> export())
@@ -78,12 +80,29 @@ public final class ShaderEditorScreen extends Screen {
         enable();
     }
     private void invalidate() { compiledText = null; result = null; if (apply != null) enable(); }
+    private void showIssues(String diagnostics) {
+        issues = CompilerDiagnostics.parse(diagnostics, path); issueIndex = 0;
+        if (editor != null) editor.setIssues(CompilerDiagnostics.byLine(issues));
+    }
+    private void nextIssue() {
+        if (issues.isEmpty()) return;
+        editor.goToLine(issues.get(issueIndex).line()); setFocused(editor);
+        issueIndex = (issueIndex + 1) % issues.size(); enable();
+    }
     private void enable() {
         compile.active = !busy;
         boolean valid = !busy && result != null && result.success() && text.equals(compiledText);
         apply.active = valid && EditorPolicy.canApply(path, language, stage);
         export.active = valid && result.spirv().length > 0;
         compile.setTooltip(Tooltip.create(Component.literal(diagnostic)));
+        issue.visible = !issues.isEmpty();
+        if (!issues.isEmpty()) {
+            var current = issues.get(issueIndex);
+            String label = (current.error() ? "Error" : "Warning") + " line " + current.line() + ": " + current.message()
+                + (issues.size() > 1 ? "  [" + (issueIndex + 1) + "/" + issues.size() + "]" : "");
+            issue.setMessage(Component.literal(font.plainSubstrByWidth(label, issue.getWidth() - 8)));
+            issue.setTooltip(Tooltip.create(Component.literal(label)));
+        }
     }
     private Path slangCompiler() {
         try {
@@ -111,10 +130,11 @@ public final class ShaderEditorScreen extends Screen {
             candidate, path, executable, this::include)).whenComplete((compiled, error) -> minecraft.execute(() -> {
                 if (request != generation || minecraft.gui.screen() != this) return;
                 busy = false;
-                if (error != null) { diagnostic = "Compilation failed: " + error.getMessage(); result = null; }
+                if (error != null) { diagnostic = "Compilation failed: " + error.getMessage(); result = null; showIssues(""); }
                 else {
                     result = compiled; compiledText = candidate;
                     diagnostic = compiled.success() ? "Compiled " + compiled.spirv().length + " bytes. " + compiled.diagnostics() : compiled.diagnostics();
+                    showIssues(compiled.diagnostics());
                 }
                 if (DevelopmentClient.preferences().verboseDebug()) org.slf4j.LoggerFactory.getLogger("greenmarine-development")
                     .info("[development] compiler {} {} {}: {}", selectedLanguage, selectedStage, path, diagnostic);
@@ -153,7 +173,6 @@ public final class ShaderEditorScreen extends Screen {
     @Override public void extractRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick);
         graphics.centeredText(font, font.plainSubstrByWidth(path, width - 16), width / 2, 10, 0xFFFFFFFF);
-        graphics.text(font, font.plainSubstrByWidth(diagnostic.replace('\n', ' '), width - 16), 8, height - 76, result != null && result.success() ? 0xFFAAEEAA : 0xFFFFDD99);
-        graphics.text(font, "Compile tooltip contains full diagnostics", 8, height - 64, 0xFFBBBBBB);
+        if (issues.isEmpty()) graphics.text(font, font.plainSubstrByWidth(diagnostic.replace('\n', ' '), width - 16), 8, height - 66, result != null && result.success() ? 0xFFAAEEAA : 0xFFFFDD99);
     }
 }

@@ -31,8 +31,12 @@ profiling or switch shaderpacks merely by opening them.
 
 ## Shader editor and compilers
 
-The editor keeps unsaved session drafts, supports multiline text, and shows
-compiler diagnostics (full text in the Compile button tooltip). Compile never
+The editor keeps unsaved session drafts and has line numbers, GLSL syntax colors,
+auto-indent (Enter keeps indentation, `{` indents, `}` dedents) and Tab as four spaces.
+Compiler errors and warnings mark their line in the gutter; the bar under the editor
+shows the current one and jumps to the next on click. Lines inside `#include`d files
+land on the `#include` line with the include id in the message. Full compiler output
+is in the Compile button tooltip. Compile never
 writes files. Save + reload is enabled only for the exact successfully compiled
 GLSL vertex/fragment candidate, or a validated JSON document. Failed compilation
 keeps the previous file bytes. Actual runtime program status remains authoritative;
@@ -58,6 +62,9 @@ Without a compatible compiler, the editor reports Slang unavailable. A Linux
 binary is not an Android/Bionic binary; Android Slang support is not claimed.
 Single-source compilation is supported; a complete external Slang module/SDK
 layout is not provided by this addon.
+
+**Planned:** a Slang in-game test on desktop (real `slangc`, PC) is scheduled for when
+the owner is back home. Until then Slang support is untested end to end.
 
 Export SPIR-V writes a content-named .spv under greenmarine-development/compiled.
 It does not automatically bind a binary to a pack. Slang and compute compilation

@@ -24,7 +24,7 @@ import java.util.*;
 
 /** Isolated title-menu GUI acceptance probe. It does not assert world rendering. */
 public final class DevelopmentGuiProbe implements ClientModInitializer {
-    private enum Stage {TITLE,WORKBENCH,WORKBENCH_CAPTURE,SHADER,COMPILE,SHADER_CAPTURE,RELOAD,MATERIAL,MATERIAL_CAPTURE,AUTO_START,AUTO_BASELINE,AUTO_REJECT,AUTO_APPLY,DONE}
+    private enum Stage {TITLE,WORKBENCH,WORKBENCH_CAPTURE,SHADER,COMPILE,SHADER_CAPTURE,RELOAD,SHADER_ERROR,SHADER_ERROR_CAPTURE,MATERIAL,MATERIAL_CAPTURE,AUTO_START,AUTO_BASELINE,AUTO_REJECT,AUTO_APPLY,DONE}
     private static final Path OUTPUT=Path.of(System.getProperty("greenmarine.development.probe.output","probe-output")).toAbsolutePath();
     private static final Map<String,Object> evidence=new LinkedHashMap<>();
     private static long started=System.nanoTime();
@@ -119,7 +119,21 @@ public final class DevelopmentGuiProbe implements ClientModInitializer {
                     DevelopmentClient.workspace().save(sourcePath,externallyEdited);
                     shader=new ShaderEditorScreen(workbench,sourcePath);client.gui.setScreen(shader);
                     require(externallyEdited.equals(field(shader,"text")),"Clean shader reopen hid an external file change behind a stale draft");
-                    evidence.put("cleanReopenSeesExternalEdit",true);shader.onClose();
+                    evidence.put("cleanReopenSeesExternalEdit",true);
+                    ((CodeEditBox)field(shader,"editor")).setValue(externallyEdited+"void broken(){ nope; }\n");
+                    invoke(shader,"compile");next(Stage.SHADER_ERROR);
+                }
+                case SHADER_ERROR -> {
+                    if((boolean)field(shader,"busy"))return;
+                    require(field(shader,"result") instanceof ShaderCompiler.Result r&&!r.success(),"Broken source compiled");
+                    var issues=(java.util.List<?>)field(shader,"issues");
+                    require(!issues.isEmpty(),"Compiler error was not mapped to an editor line: "+field(shader,"diagnostic"));
+                    evidence.put("errorLine",((CompilerDiagnostics.Issue)issues.getFirst()).line());
+                    if(ticks<5||!renderedFiveFrames())return;capture(client,"shader-editor-error.png");next(Stage.SHADER_ERROR_CAPTURE);
+                }
+                case SHADER_ERROR_CAPTURE -> {
+                    if(!captured)return;
+                    ((CodeEditBox)field(shader,"editor")).setValue(DevelopmentClient.workspace().read(sourcePath));shader.onClose();
                     material=new MaterialEditorScreen(workbench);client.gui.setScreen(material);next(Stage.MATERIAL);
                 }
                 case MATERIAL -> {
