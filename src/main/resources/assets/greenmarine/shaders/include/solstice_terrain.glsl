@@ -37,7 +37,7 @@ vec3 solReliefNormal(vec3 normal,vec3 position,vec2 uv,float strength) {
     vec2 duvx=dFdx(uv)*size,duvy=dFdy(uv)*size;
     vec3 dpx=dFdx(position),dpy=dFdy(position);
     float footprint=1.0-smoothstep(.35,.9,max(length(duvx),length(duvy)));
-    if(marinePbrNormalsPresent()) {
+    if(marinePbrNormalsPresent(uv)) {
         // Resource pack normal map replaces the procedural relief; fades out like it once texels
         // shrink below a pixel, while its ambient occlusion stays.
         vec4 mapped=marinePbrNormal(uv);
@@ -98,6 +98,9 @@ void main() {
     if(color.a<.01) discard;
     vec3 base=solLinear(sampled.rgb*surfaceColor.rgb);
     vec4 material=marineBlockMaterial(texCoord0);
+    if(!water) material=marineInferredMaterial(texCoord0,material,sampled.rgb);
+    vec4 addon=water?vec4(0):marineAddonProperties(texCoord0);
+    if(addon.a>0.0) material=vec4(addon.rg,0,addon.a);
     float puddle=solPuddle(surfacePosition,normal,surfaceLight.y)*marinePuddleRetention(material.w);
     float wet=clamp(Environment.z*marineParameter(SOL_WETNESS)*surfaceLight.y,0.0,1.0);
     float roughness=clamp(material.x*marineParameter(SOL_ROUGHNESS)*(1.0-wet*.65),.06,.98);
@@ -108,7 +111,7 @@ void main() {
     if(pbr.present && !water && puddle<=.12) {
         roughness=clamp(pbr.roughness*(1.0-wet*.65),.04,.98);
         if(pbr.metal) material=vec4(roughness,1.0,0.0,2.0);
-        else if(pbr.roughness<.55 && pbr.f0>.015) material=vec4(roughness,clamp(pbr.f0*12.0,.2,1.0),0.0,9.0);
+        else if(pbr.roughness<.55 && pbr.f0>.015) material=vec4(roughness,1.0,0.0,9.0);
         else if(material.w==2.0 || material.w==8.0 || material.w==9.0) material=vec4(roughness,0.0,0.0,1.0);
     }
 #ifdef GREENMARINE_SURFACE_CAPTURE
@@ -179,6 +182,7 @@ void main() {
     lit=mix(lit,vec3(.72,.78,.83)*illumination,clamp(snow,0.0,.7));
     float emission=pow(surfaceLight.x,9.0)*max(0.0,solLuma(base)-.35)*marineParameter(SOL_EMISSION);
     if(pbr.present) emission=max(emission,pbr.emission*2.0*marineParameter(SOL_EMISSION)/.35);
+    if(addon.a>0.0) emission=max(emission,addon.b*2.0*marineParameter(SOL_EMISSION)/.35);
     lit+=base*emission;
     if(water) {
         vec3 absorptionColor=vec3(.012,.095,.14)*(.3+.7*solDay());
@@ -227,14 +231,14 @@ void main() {
     } else if(material.w==2.0) {
         // Metal: no diffuse term at all. Colour is the traced reflection tinted by albedo Fresnel;
         // roughness blurs it towards the surface's own irradiance instead of towards matte paint.
-        vec3 fresnel=solMaterialFresnel(base,2.0,max(dot(normal,view),0.0));
+        vec3 fresnel=pbr.present?marinePbrFresnel(pbr,base,dot(normal,view)):solMaterialFresnel(base,2.0,max(dot(normal,view),0.0));
         vec3 reflection=solSky(reflected,true)*marineSkyVisibility(surfaceLight.y);
         reflection=mix(reflection,max(nativeReflection.rgb,vec3(0)),clamp(nativeReflection.a*nativeCoverage,0.0,1.0));
         vec3 environment=mix(reflection,illumination*(1.0-wet*.16),smoothstep(.25,.95,roughness)*.75);
-        float metalness=clamp(marineParameter(SOL_REFLECTION)/.55,0.0,1.0);
+        float metalness=clamp(marineParameter(SOL_REFLECTION)/.55,0.0,1.0)*(addon.a>0.0?addon.g:1.0);
         lit=mix(lit,environment*fresnel,metalness);
     } else if(material.y>0.0) {
-        vec3 fresnel=solMaterialFresnel(base,material.w,max(dot(normal,view),0.0));
+        vec3 fresnel=pbr.present?marinePbrFresnel(pbr,base,dot(normal,view)):solMaterialFresnel(base,material.w,max(dot(normal,view),0.0));
         vec3 reflection=solSky(reflected,true)*marineSkyVisibility(surfaceLight.y);
         reflection=mix(reflection,max(nativeReflection.rgb,vec3(0)),clamp(nativeReflection.a*nativeCoverage,0.0,1.0));
         vec3 weight=material.w==8.0?solSpecularWeight(fresnel,roughness,material.w)
@@ -243,8 +247,8 @@ void main() {
     }
     if(!water) {
         // Every surface gets a sun highlight; dielectrics use F0 0.04, metals their albedo.
-        vec3 f0=material.w==2.0?base:vec3(material.w==8.0?.17:.04);
-        lit+=solSunSpecular(shading,view,clamp(roughness*.78,.08,1.0),f0,sunVisibility*surfaceLight.y)*marineParameter(SOL_SPECULAR);
+        vec3 f0=pbr.present?marinePbrF0(pbr,base):(material.w==2.0?base:vec3(material.w==8.0?.17:.04));
+        lit+=solSunSpecular(shading,view,clamp(roughness*.78,.08,1.0),f0,sunVisibility*surfaceLight.y)*marineParameter(SOL_SPECULAR)*(addon.a>0.0?addon.g:1.0);
     }
     color.rgb=solDisplay(lit);
     // Diagnostic 9: LabPBR material read (red present, green smoothness, blue metal).

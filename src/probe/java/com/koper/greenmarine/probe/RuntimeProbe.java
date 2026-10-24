@@ -84,6 +84,7 @@ public final class RuntimeProbe implements ClientModInitializer {
         String name = screen == null ? "none" : screen.getClass().getSimpleName();
         if (!name.equals(lastScreen)) { lastScreen = name; GreenMarine.LOGGER.info("Probe screen: {}", name); }
         if (client.gui.overlay() != null) return;
+        if (Boolean.getBoolean("greenmarine.probe.pbr") && screen instanceof TitleScreen) {PbrAtlasProbe.run(client,OUTPUT);return;}
         if (stage == 0 && screen instanceof TitleScreen) {
             for (var child : screen.children()) {
                 if (child instanceof Button button && button.getMessage().getString().equals(Component.translatable("menu.playdemo").getString())) {

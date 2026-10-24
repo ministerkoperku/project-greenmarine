@@ -9,3 +9,7 @@
 /.native-test-*/
 # profiles, screenshots and results of test runs, hundreds of MB, kept locally
 /development/evidence/
+
+/run-pbr/
+
+/run-pbr-inferred/

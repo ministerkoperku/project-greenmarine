@@ -423,3 +423,19 @@ Schema 1 additionally accepts optional `programs` with `target`, optional `verte
 `fragment`, and `worldRays`. Existing passes and parameters keep their layout.
 See [world shader programs](WORLD-PROGRAMS.md) for the host interfaces, automatic
 bindings, OIT requirements and the Seabreeze example.
+
+## Material addons
+
+A schema 1 manifest can declare up to 16 material addon JSON resources:
+
+```json
+"materialAddons": ["demo:greenmarine/materials/robot.json"]
+```
+
+Namespaced resource IDs resolve through the shaderpack's private assets, then
+mounted resources. The catalog snapshots each declared JSON and its referenced
+mask PNGs during reload, so independently loaded packs can reuse resource IDs.
+These addons apply only while their owning shaderpack is selected. Invalid
+addons are reported independently and do not prevent the shaderpack from loading.
+JSON resources are limited to 64 KiB and mask PNG files to 256 KiB; external
+shaderpacks retain their existing 8 MiB snapshot limit.

@@ -62,6 +62,16 @@ class ExternalRenderersTest {
             assertNotNull(again,"closing a registration frees its id");
         }
     }
+    @Test void materialPreparationRunsBeforeDrawingAndDisablesOnlyFailedContributor() {
+        var calls=new java.util.ArrayList<String>();
+        try(var bad=ExternalRenderers.registerMaterials("test:prepare_bad",()->{calls.add("bad");throw new IllegalStateException("prepare failed");},t->calls.add("bad_draw"));
+            var good=ExternalRenderers.registerMaterials("test:prepare_good",()->calls.add("prepare"),t->calls.add("draw"))) {
+            ExternalRenderers.prepareMaterials();ExternalRenderers.drawMaterials(123,4,4,126);
+            ExternalRenderers.prepareMaterials();ExternalRenderers.drawMaterials(123,4,4,126);
+            assertEquals(java.util.List.of("bad","prepare","draw","prepare","draw"),calls);
+        }
+        calls.clear();ExternalRenderers.prepareMaterials();assertTrue(calls.isEmpty());
+    }
     @Test void materialContributorsReceiveTheCapturedCameraAndFailuresAreIsolated() {
         var seen=new ExternalRenderers.MaterialTarget[1];
         ExternalRenderers.captureCamera(new org.joml.Matrix4f().perspective(1,1,.05f,100),new org.joml.Matrix4f().rotateY(1),10.5,64,-3,true);

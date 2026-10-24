@@ -63,9 +63,10 @@ public final class ExternalRenderers {
 
     private static final Matrix3fc IDENTITY = new Matrix3f();
     private static final Map<String, RayContributor> RAY = new LinkedHashMap<>();
-    private static final Map<String, MaterialContributor> MATERIALS = new LinkedHashMap<>();
+    private record MaterialCallbacks(Runnable prepare,MaterialContributor draw) {}
+    private static final Map<String, MaterialCallbacks> MATERIALS = new LinkedHashMap<>();
     private static volatile List<Map.Entry<String, RayContributor>> raySnapshot = List.of();
-    private static volatile List<Map.Entry<String, MaterialContributor>> materialSnapshot = List.of();
+    private static volatile List<Map.Entry<String, MaterialCallbacks>> materialSnapshot = List.of();
     private static final Set<String> FAILED = Collections.synchronizedSet(new HashSet<>());
 
     /**
@@ -202,11 +203,27 @@ public final class ExternalRenderers {
     @FunctionalInterface
     public interface MaterialContributor { void drawMaterials(MaterialTarget target); }
 
-    public static synchronized Registration registerMaterials(String id, MaterialContributor contributor) {
-        requireId(id); Objects.requireNonNull(contributor);
-        if (MATERIALS.putIfAbsent(id, contributor) != null) throw new IllegalArgumentException("Duplicate material contributor: " + id);
-        materialSnapshot = List.copyOf(MATERIALS.entrySet()); FAILED.remove(id);
-        return () -> { synchronized (ExternalRenderers.class) { if (MATERIALS.remove(id, contributor)) materialSnapshot = List.copyOf(MATERIALS.entrySet()); } };
+    public static Registration registerMaterials(String id,MaterialContributor contributor) {
+        return registerMaterials(id,()->{},contributor);
+    }
+    /** Preparation runs on the render thread before any material render pass; upload textures here. */
+    public static synchronized Registration registerMaterials(String id,Runnable prepare,MaterialContributor contributor) {
+        requireId(id);Objects.requireNonNull(prepare);Objects.requireNonNull(contributor);
+        var callbacks=new MaterialCallbacks(prepare,contributor);
+        if(MATERIALS.putIfAbsent(id,callbacks)!=null)throw new IllegalArgumentException("Duplicate material contributor: "+id);
+        materialSnapshot=List.copyOf(MATERIALS.entrySet());FAILED.remove(id);
+        return ()->{synchronized(ExternalRenderers.class){if(MATERIALS.remove(id,callbacks))materialSnapshot=List.copyOf(MATERIALS.entrySet());}};
+    }
+    /** Host use only, before opening capture passes. A preparation failure also disables its draw. */
+    public static void prepareMaterials() {
+        for(var entry:materialSnapshot) {
+            if(FAILED.contains(entry.getKey()))continue;
+            try {entry.getValue().prepare().run();}
+            catch(RuntimeException|LinkageError failure) {
+                FAILED.add(entry.getKey());
+                GreenMarine.LOGGER.error("External material preparation {} failed and was disabled until re-registered",entry.getKey(),failure);
+            }
+        }
     }
 
     private static final Matrix4f PROJECTION = new Matrix4f(), VIEW = new Matrix4f();
@@ -227,7 +244,7 @@ public final class ExternalRenderers {
             cameraX, cameraY, cameraZ, zZeroToOne);
         for (var entry : entries) {
             if (FAILED.contains(entry.getKey())) continue;
-            try { entry.getValue().drawMaterials(target); }
+            try { entry.getValue().draw().drawMaterials(target); }
             catch (RuntimeException | LinkageError failure) {
                 FAILED.add(entry.getKey());
                 GreenMarine.LOGGER.error("External material contributor {} failed and was disabled until re-registered", entry.getKey(), failure);

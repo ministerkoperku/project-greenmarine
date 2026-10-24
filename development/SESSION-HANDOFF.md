@@ -4,6 +4,22 @@ Updated 2026-10-15 for 0.7.0-prototype. This file preserves the
 owner's next direction across sessions. Read the current source before treating
 any historical report as a new bug.
 
+## Current 0.9.8 LabPBR repair (2026-10-24, Android workspace)
+
+The current local checkout for this work is `/root/Downloads/project-greenmarine`.
+LabPBR zero reads were reproduced with an isolated Minecraft Vulkan fixture.
+The upload was correct: `TextureAtlasSprite.getX/getY` point at the gutter origin,
+while visible UVs include padding. Copying at rounded `getU0/getV0` times atlas size
+fixes specular and normal positioning. The same fixture changed from absent/zero
+samples to raw `(192,231,0,255)`, material present, metal, roughness 0.061.
+
+An R8 per-texel presence mask separates valid black maps from absent maps and
+keeps procedural relief on blocks without normal maps. Solstice uses the decoded
+dielectric F0, and CPU atlas images close after staging. See `docs/LABPBR.md` for
+support limits and `development/2026-10-24-labpbr-plan.md` for session evidence.
+Verification and exported artifact hashes: `development/2026-10-24-labpbr-evidence.md`.
+Kender texture PBR and per-part robot maps remain separate work.
+
 ## Current state 2026-10-23 evening (0.9.7, merged WIP)
 
 The live clone is ~/Projekty/project-greenmarine (the mods-src clone is stale). It now holds the

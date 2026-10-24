@@ -171,3 +171,11 @@ GREENMARINE_GPU_TEST_DEVICE="RX 9070 XT" cargo test --lib surface_gpu_external -
 it). In the phone's proot environment, lavapipe (Mesa 26, aarch64) crashes while
 building acceleration structures, also on code predating this API, so ray-query
 tests there need real hardware; plain compute tests run on lavapipe.
+
+Material textures must upload before capture opens its render pass. The additive
+`ExternalRenderers.registerMaterials(id, prepare, draw)` overload accepts a
+`Runnable prepare` callback that GreenMarine calls from world preparation after
+its PBR uploads and before any capture pass. Allocate/upload material maps there;
+`draw` only records compatible draws inside the already open pass. Preparation
+failures disable that contributor's draw until re-registration and do not block
+other contributors. The original two-argument registration remains available.

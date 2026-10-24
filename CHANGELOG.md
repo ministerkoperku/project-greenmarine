@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.10-prototype
+
+- Added CPU material addon API1 and editable PNG+JSON per-texture materials from mods, resource packs and optional shaderpack manifests.
+- Solstice applies masked roughness/reflection/emission/classes with explicit LabPBR precedence; external renderers can prepare material uploads before capture passes.
+
+## 0.9.9-prototype
+
+- Solstice supplies conservative texture-family PBR defaults for albedo-only packs, with bounded matte roughness variation and existing procedural relief. Explicit LabPBR maps, builtin profiles, water and transparent materials remain authoritative.
+
+## 0.9.8
+
+- Fixed LabPBR maps being copied into atlas gutters instead of the visible block UV rectangles on Minecraft 26.3.
+- Explicit material-map presence preserves valid black specular texels and procedural relief on unmapped blocks.
+- Solstice uses LabPBR dielectric F0 for sun highlights and reflections. CPU atlas images are released after staging uploads.
+- Added opt-in Vulkan material tests and an isolated Minecraft probe covering resource-pack removal and restoration.
+
 ## 0.9.7
 
 - Solstice RT: ray-traced volumetric sunlight. The native pass marches each reduced

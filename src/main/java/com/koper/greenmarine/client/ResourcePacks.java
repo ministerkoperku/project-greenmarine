@@ -26,6 +26,7 @@ public final class ResourcePacks {
             GreenMarine.LOGGER.info("Shaderpack catalog: packs={}, generation={}, reloadHealthy={}, reason={}",
                 CATALOG.packs().size(), CATALOG.generation(), healthy, CATALOG.error());
         } catch (RuntimeException error) { GreenMarine.LOGGER.warn("Keeping shaderpack catalog after read failure: {}", error.getMessage()); }
+        ResourceMaterials.reload(resources,CATALOG.packs());
         ShaderRuntime.reset();
     }
     private static String read(ResourceManager resources, String id) {

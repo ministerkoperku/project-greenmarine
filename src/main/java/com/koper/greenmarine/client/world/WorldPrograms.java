@@ -40,7 +40,7 @@ public final class WorldPrograms {
     private static final ByteBuffer FRAME=ByteBuffer.allocateDirect(MarineFrame.BYTES).order(ByteOrder.nativeOrder());
     private static final ByteBuffer SURFACE=ByteBuffer.allocateDirect(SURFACE_BYTES).order(ByteOrder.nativeOrder());
     private static GpuBuffer frame,surface,surfaceOpaque,environment,ray,voxel,surfaceRay,materialProfiles,materialExtension;
-    private static com.mojang.renderpearl.api.textures.GpuTextureView voxelMaterials,heightField,pbrSpecular,pbrNormal;
+    private static com.mojang.renderpearl.api.textures.GpuTextureView voxelMaterials,heightField,pbrSpecular,pbrNormal,pbrPresence;
     private static boolean prepared,failed,pendingDraw,logged,captureMode,captureWater,surfaceReady,captureUnsupported;
     private static boolean earlyMaterials,backgroundDrawn;
     private static final boolean DISTANT_HORIZONS=net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("distanthorizons");
@@ -111,7 +111,8 @@ public final class WorldPrograms {
                 ShaderRuntime.settings().quality(),ShaderRuntime.rays().effective(),projection,camera.viewRotationMatrix,ShaderRuntime.script());
             FRAME.position(0).limit(MarineFrame.BYTES);encoder.writeToBuffer(frame.slice(),FRAME);
             SURFACE.position(0).limit(SURFACE_BYTES);encoder.writeToBuffer(surface.slice(),SURFACE);encoder.writeToBuffer(surfaceOpaque.slice(),SURFACE.rewind());ray=RayWorld.bindings(encoder);
-            voxel=VoxelWorld.prepare(encoder,camera.pos.x,camera.pos.y,camera.pos.z,ShaderRuntime.rays().effective()==RayMode.VOXEL);voxelMaterials=VoxelWorld.materials(encoder);heightField=HEIGHTS.bind(encoder);pbrSpecular=PBR.specular(encoder);pbrNormal=PBR.normal(encoder);
+            voxel=VoxelWorld.prepare(encoder,camera.pos.x,camera.pos.y,camera.pos.z,ShaderRuntime.rays().effective()==RayMode.VOXEL);voxelMaterials=VoxelWorld.materials(encoder);heightField=HEIGHTS.bind(encoder);pbrSpecular=PBR.specular(encoder);pbrNormal=PBR.normal(encoder);pbrPresence=PBR.presence(encoder);
+            com.koper.greenmarine.api.external.ExternalRenderers.prepareMaterials();
             prepared=true;
         } catch(RuntimeException|LinkageError error) {fail(error);}
     }
@@ -191,7 +192,7 @@ public final class WorldPrograms {
         pass.setUniform("MarineMaterialFrame",materialProfiles);pass.setUniform("MarineMaterialExtension",materialExtension);
         var linear=RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR);var nearest=RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST);
         pass.setUniform("MarineOpaqueColor",OPAQUE.color(),linear);pass.setUniform("MarineOpaqueDepth",OPAQUE.depth(),nearest);
-        pass.setUniform("RayLighting",RayWorld.lighting(),linear);pass.setUniform("RayNormalDepth",RayWorld.normals(),nearest);pass.setUniform("RayAlbedo",RayWorld.albedo(),linear);pass.setUniform("VoxelMaterials",voxelMaterials,nearest);pass.setUniform("MarineHeightField",heightField,nearest);pass.setUniform("MarinePbrSpecular",pbrSpecular,nearest);pass.setUniform("MarinePbrNormal",pbrNormal,nearest);
+        pass.setUniform("RayLighting",RayWorld.lighting(),linear);pass.setUniform("RayNormalDepth",RayWorld.normals(),nearest);pass.setUniform("RayAlbedo",RayWorld.albedo(),linear);pass.setUniform("VoxelMaterials",voxelMaterials,nearest);pass.setUniform("MarineHeightField",heightField,nearest);pass.setUniform("MarinePbrSpecular",pbrSpecular,nearest);pass.setUniform("MarinePbrNormal",pbrNormal,nearest);pass.setUniform("MarinePbrPresence",pbrPresence,nearest);
         pass.setUniform("MarineSurfaceNormalDepth",!captureMode && surfaceReady?MATERIALS.normal():RayWorld.normals(),nearest);
         pass.setUniform("MarineSurfaceAlbedo",!captureMode && surfaceReady?MATERIALS.albedo():RayWorld.albedo(),nearest);
         pass.setUniform("RaySurfaceLighting",RayWorld.surfaceLighting(),linear);pass.setUniform("RayReflection",RayWorld.reflections(),linear);pass.setUniform("RaySurfaceExtra",RayWorld.surfaceExtra(),linear);
@@ -331,6 +332,6 @@ public final class WorldPrograms {
         bindingEpoch++;bindingUpdates=bindingSkips=0;
         BACKGROUND.close();DISTANT.close();HEIGHTS.close();HEIGHTS.reset();PBR.close();
         prepared=failed=pendingDraw=logged=captureMode=captureWater=surfaceReady=captureUnsupported=false;WEATHER.reset();if(mainGpu!=null)mainGpu.close();mainGpu=null;mainFrames=0;mainMeasurement=-1;VARIANTS.values().forEach(CompiledRenderPipeline::close);VARIANTS.clear();CAPTURE_VARIANTS.values().forEach(CompiledRenderPipeline::close);CAPTURE_VARIANTS.clear();OWNED.clear();OPAQUE.close();MATERIALS.close();
-        if(frame!=null)frame.close();if(surface!=null)surface.close();if(surfaceOpaque!=null)surfaceOpaque.close();if(environment!=null)environment.close();if(materialProfiles!=null)materialProfiles.close();if(materialExtension!=null)materialExtension.close();materialProfiles=materialExtension=null;frame=surface=surfaceOpaque=environment=ray=voxel=surfaceRay=null;voxelMaterials=null;draws=captures=0;COPY_CPU.clear();
+        if(frame!=null)frame.close();if(surface!=null)surface.close();if(surfaceOpaque!=null)surfaceOpaque.close();if(environment!=null)environment.close();if(materialProfiles!=null)materialProfiles.close();if(materialExtension!=null)materialExtension.close();materialProfiles=materialExtension=null;frame=surface=surfaceOpaque=environment=ray=voxel=surfaceRay=null;voxelMaterials=heightField=pbrSpecular=pbrNormal=pbrPresence=null;draws=captures=0;COPY_CPU.clear();
     }
 }

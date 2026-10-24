@@ -21,6 +21,16 @@ class ShaderPackTest {
         assertThrows(UnsupportedOperationException.class, () -> pack.passes().clear());
     }
 
+    @Test void materialAddonDeclarationsAreBoundedNamespacedAndImmutable() {
+        var pack=parse("{\"schema\":1,\"id\":\"demo:p\",\"passes\":[],\"materialAddons\":[\"demo:greenmarine/materials/robot.json\"]}");
+        assertEquals(java.util.List.of("demo:greenmarine/materials/robot.json"),pack.materialAddons());
+        assertThrows(UnsupportedOperationException.class,()->pack.materialAddons().clear());
+        for(String declaration:new String[]{"[1]","[\"../robot.json\"]","[\"demo:a.json\",\"demo:a.json\"]"})
+            assertThrows(IllegalArgumentException.class,()->parse("{\"schema\":1,\"id\":\"demo:p\",\"passes\":[],\"materialAddons\":"+declaration+"}"));
+        String many=java.util.stream.IntStream.range(0,17).mapToObj(i->"\"demo:m"+i+".json\"").collect(java.util.stream.Collectors.joining(","));
+        assertThrows(IllegalArgumentException.class,()->parse("{\"schema\":1,\"id\":\"demo:p\",\"passes\":[],\"materialAddons\":["+many+"]}"));
+    }
+
     @Test void rejectsBrokenContractsBeforeRendering() {
         for (String value : new String[]{
             "{\"schema\":2,\"id\":\"demo:p\",\"passes\":[]}",

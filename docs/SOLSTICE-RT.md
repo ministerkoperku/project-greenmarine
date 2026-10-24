@@ -154,8 +154,10 @@ a world position. See [surface rendering](SURFACE-RENDERING.md) for mod access.
 - The native scene is the loaded baked block-model geometry around the player,
   the local player body and registered external meshes. Other entities, fluids as
   geometry and distant terrain are not ray targets.
-- No caustics, multi-bounce transport, volumetric clouds, shadow cascades or PBR
-  texture maps. Clouds are procedural layers; stars and moon are analytic.
+- No caustics, multi-bounce transport, volumetric clouds or shadow cascades.
+  Clouds are procedural layers; stars and moon are analytic.
+- [LabPBR block maps](LABPBR.md) supply smoothness, F0, normal/AO and emission;
+  animated material maps, POM and external Kender texture maps remain separate work.
 - The material library covers the blocks listed above; other blocks are opaque.
 - Performance depends heavily on the GPU; measure at a fixed pose, resolution and
   quality with profiling enabled (F6) rather than relying on these descriptions.

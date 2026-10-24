@@ -104,3 +104,30 @@ Further probes: `-PvoxelProbe`, `-PworldLightingProbe`, `-PhardwareRtProbe`,
   compatible; add optional symbols instead of changing existing ones.
 - Never advertise hardware RT because a GPU supports it; report the initialized path.
 - Public docs live in `docs/`, plans and evidence in `development/`.
+
+### LabPBR regression checks
+
+The opt-in test uses the actual Renderpearl Vulkan backend and production GLSL;
+it needs a Vulkan device and SDL video support, but no hardware RT or world:
+
+```sh
+xvfb-run -a ./gradlew -PpbrGpuTest test --tests '*PbrUploadGpuTest'
+```
+
+The Minecraft probe prepares its own resource pack and stops after checking the
+stitched atlas, corner texels, unmapped controls and two resource reloads (maps
+removed, then restored). It does not open a world. Use a fresh run directory:
+
+```sh
+python3 tools/prepare-pbr-probe.py run-pbr
+xvfb-run -a ./gradlew -PruntimeProbe -PpbrProbe -PnativeDisabled \
+  -PprobeRunDir=run-pbr runClient
+cat run-pbr/probe-output/pbr-result.json
+```
+
+Success is `"status":"passed"` in `pbr-result.json`; a client exit code alone does
+not prove probe success. On machines without a display, use Xvfb and
+`SDL_VIDEODRIVER=x11`. Select lavapipe explicitly if needed through
+`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. This verifies upload,
+stitching and GLSL material decoding, not hardware-RT gameplay or Android visuals.
+See [LabPBR support and limits](LABPBR.md).

@@ -133,6 +133,7 @@ public final class ShaderRuntime {
         }
     }
     public static void reset() {
+        com.koper.greenmarine.api.material.MaterialAddons.setActivePackId(settings.pack());
         if (script != null) script.close(); script = null; active = null; failureReported = false;
         expected=java.util.Set.of();LOAD.begin(settings.pack(),expected);lastNotice=null;
         com.koper.greenmarine.client.rt.RayWorld.reset();

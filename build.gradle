@@ -62,6 +62,7 @@ java {
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 tasks.named('test') {
     useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED'
+    if (providers.gradleProperty('pbrGpuTest').isPresent()) systemProperty 'greenmarine.test.gpu', 'true'
     def sodiumResources = providers.environmentVariable('GREENMARINE_TEST_SODIUM_RESOURCES')
     inputs.property 'sodiumShaderResources', sodiumResources.getOrElse('unavailable')
     if (sodiumResources.isPresent()) inputs.dir(sodiumResources.get()).withPropertyName('sodiumShaders')
@@ -225,6 +226,7 @@ loom {
             if (providers.gradleProperty('namedPassProbe').isPresent()) vmArg '-Dgreenmarine.probe.named_passes=true'
             if (providers.gradleProperty('historyCompatibilityProbe').isPresent()) vmArg '-Dgreenmarine.probe.history_compatibility=true'
             if (providers.gradleProperty('solsticeProbe').isPresent()) vmArg '-Dgreenmarine.probe.solstice=true'
+            if (providers.gradleProperty('pbrProbe').isPresent()) vmArg '-Dgreenmarine.probe.pbr=true'
             if (providers.gradleProperty('lookProbe').isPresent()) vmArg '-Dgreenmarine.probe.look=true'
             if (providers.gradleProperty('lookNear').isPresent()) vmArg '-Dgreenmarine.probe.look.near=true'
             if (providers.gradleProperty('lookRoom').isPresent()) vmArg '-Dgreenmarine.probe.look.room=true'
@@ -246,7 +248,7 @@ loom {
             if (providers.gradleProperty('voxelProbe').isPresent()) vmArg '-Dgreenmarine.probe.voxel=true'
             if (providers.gradleProperty('worldLightingProbe').isPresent()) vmArg '-Dgreenmarine.probe.world=true'
             if (providers.gradleProperty('worldRestoreMode').isPresent()) vmArg '-Dgreenmarine.probe.restore_mode=' + providers.gradleProperty('worldRestoreMode').get()
-            runDir 'run'
+            runDir providers.gradleProperty('probeRunDir').getOrElse('run')
             programArgs '--graphicsBackend', providers.gradleProperty('graphicsBackend').getOrElse('vulkan')
             if (providers.gradleProperty('demo').isPresent()) programArgs '--demo'
             if (runtimeProbe) {

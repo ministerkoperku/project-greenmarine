@@ -2,14 +2,16 @@ package com.koper.greenmarine.api.pack;
 
 import com.google.gson.JsonParser;
 import com.koper.greenmarine.api.LightRegistry;
+import com.koper.greenmarine.api.material.MaterialAddons;
 import com.koper.greenmarine.script.PackScript;
 import java.util.*;
 import java.util.function.Function;
 
 public final class PackCatalog {
     private static final java.util.regex.Pattern INCLUDE = java.util.regex.Pattern.compile("(?m)^\\s*#include\\s*[<\"]([^>\"]+)[>\"]");
-    public record LoadedPack(ShaderPack definition, String script, Map<String, String> sources,Map<String,ShaderBinary> binaries) {
-        public LoadedPack { sources = Map.copyOf(sources); binaries=Map.copyOf(binaries); }
+    public record LoadedPack(ShaderPack definition, String script, Map<String, String> sources,Map<String,ShaderBinary> binaries,List<MaterialAddons.Source> materialAddons) {
+        public LoadedPack { sources = Map.copyOf(sources); binaries=Map.copyOf(binaries); materialAddons=List.copyOf(materialAddons); }
+        public LoadedPack(ShaderPack definition,String script,Map<String,String> sources,Map<String,ShaderBinary> binaries) { this(definition,script,sources,binaries,List.of()); }
         public LoadedPack(ShaderPack definition,String script,Map<String,String> sources) { this(definition,script,sources,Map.of()); }
     }
     private Map<String, LoadedPack> snapshot = Map.of();
@@ -58,7 +60,7 @@ public final class PackCatalog {
                 for(String shader:new ArrayList<>(shaders.values())) loadIncludes(shader,shaders,resources,new HashSet<>(),0);
                 String script = pack.script() == null ? "function update(frame) end" : require(resources, pack.script(), 65_536);
                 try (var validation = new PackScript(pack, script, new LightRegistry())) { /* Validate compilation and initialization before publishing. */ }
-                if (staging.putIfAbsent(pack.id(), new LoadedPack(pack, script, shaders,binaries)) != null) {
+                if (staging.putIfAbsent(pack.id(), new LoadedPack(pack, script, shaders,binaries,materialAddons(input,pack,resources))) != null) {
                     throw new IllegalArgumentException("Duplicate shaderpack: " + pack.id());
                 }
             }
@@ -66,6 +68,30 @@ public final class PackCatalog {
         } catch (RuntimeException exception) {
             error = origin + ": " + exception.getMessage(); return false;
         }
+    }
+
+    private static List<MaterialAddons.Source> materialAddons(PackSource input,ShaderPack pack,Function<String,String> resources) {
+        var addons=new ArrayList<MaterialAddons.Source>();
+        for(String id:pack.materialAddons()) {
+            String json;
+            try {json=require(resources,id,65_536);}
+            catch(RuntimeException error) {
+                // Preserve an invalid isolated source for the material loader's diagnostics.
+                addons.add(new MaterialAddons.Source(input.origin()+"!/"+id,"",key->{throw error;},pack.id()));
+                continue;
+            }
+            var source=new MaterialAddons.Source(input.origin()+"!/"+id,json,key->{
+                ShaderPack.requireId(key);
+                byte[] bytes=input.binaries().apply(key);
+                if(bytes!=null && bytes.length>262_144)throw new IllegalArgumentException("Material addon binary exceeds 256 KiB: "+key);
+                return bytes;
+            },pack.id());
+            try {addons.add(MaterialAddons.snapshot(source));}
+            catch(RuntimeException error) {
+                addons.add(new MaterialAddons.Source(source.origin(),json,key->{throw error;},pack.id()));
+            }
+        }
+        return List.copyOf(addons);
     }
 
     private static void loadIncludes(String text,Map<String,String> sources,Function<String,String> resources,Set<String> visiting,int depth) {

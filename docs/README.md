@@ -123,9 +123,11 @@ Select it with `"effect": "demo:aurora"` in `greenmarine.json`.
 - RT covers a finite region of loaded blocks around the player plus the player
   body and registered external meshes; entities and fluids are not ray targets.
 - Entities, block entities, particles and rain keep Minecraft's shaders.
-- No upscaling (FSR), path tracing, caustics or PBR texture maps.
+- No upscaling (FSR), path tracing or caustics. [LabPBR block maps](LABPBR.md) are supported.
 - First use of a pack compiles pipelines and can hitch briefly.
 
 Mod developers: [rendering API](RENDERING-API.md), [shaderpacks](SHADERPACKS.md),
 [world programs](WORLD-PROGRAMS.md), [surface rendering](SURFACE-RENDERING.md),
 [external renderers](EXTERNAL-RENDERERS.md), [roadmap](API-ROADMAP.md).
+
+Resource-pack material support: [LabPBR](LABPBR.md).

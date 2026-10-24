@@ -16,6 +16,26 @@ class PackCatalogTest {
         assertFalse(catalog.error().isBlank());
     }
 
+    @Test void materialAddonSourcesSnapshotPrivateAssetsAndKeepPackScope() {
+        var catalog=new PackCatalog();
+        String manifest="{\"schema\":1,\"id\":\"demo:pack\",\"passes\":[],\"materialAddons\":[\"demo:materials/robot.json\"]}";
+        String addon="{\"schema\":1,\"id\":\"demo:robot\",\"textures\":{\"demo:robot\":{\"mask\":\"demo:masks/robot.png\",\"palette\":{}}}}";
+        var resources=new java.util.HashMap<String,String>();resources.put("demo:materials/robot.json",addon);
+        byte[] png={1,2,3};
+        assertTrue(catalog.reload(java.util.List.of(new PackSource("private",manifest,resources::get,id->png))),catalog.error());
+        var loaded=catalog.get("demo:pack").orElseThrow();
+        var source=loaded.materialAddons().getFirst();
+        assertEquals("demo:pack",source.shaderPackId());assertEquals(addon,source.json());
+        resources.clear();png[0]=99;
+        assertArrayEquals(new byte[]{1,2,3},source.binaries().apply("demo:masks/robot.png"));
+        source.binaries().apply("demo:masks/robot.png")[1]=99;
+        assertArrayEquals(new byte[]{1,2,3},source.binaries().apply("demo:masks/robot.png"));
+        assertNull(source.binaries().apply("demo:undeclared.png"));
+        assertTrue(catalog.reload(java.util.List.of(new PackSource("private",manifest,id->addon,id->new byte[262145]))));
+        var rejected=catalog.get("demo:pack").orElseThrow().materialAddons().getFirst();
+        assertThrows(IllegalArgumentException.class,()->rejected.binaries().apply("demo:masks/robot.png"));
+    }
+
     @Test void rejectsMissingScriptDuplicateIdsAndMissingFallbackSource() {
         var catalog = new PackCatalog();
         assertFalse(catalog.reload(Map.of("a",valid,"b",valid), id -> "source"));
