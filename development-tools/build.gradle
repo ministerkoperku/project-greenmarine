@@ -33,6 +33,7 @@ tasks.withType(JavaCompile).configureEach { options.release = 25 }
 tasks.named('test') {
     useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED'
     if (providers.gradleProperty('developmentGpuTest').isPresent()) systemProperty 'greenmarine.development.gpu', 'true'
+    if (providers.gradleProperty('irisPack').isPresent()) systemProperty 'greenmarine.iris.pack', providers.gradleProperty('irisPack').get()
 }
 tasks.register('irisConverterDistribution', Zip) {
     dependsOn tasks.named('jar')
@@ -66,4 +67,12 @@ loom {
             vmArg '--enable-native-access=ALL-UNNAMED'
         }
     }
+}
+tasks.register('irisCoverage', JavaExec) {
+    description = 'IR-1: translate+compile every program of an Iris pack. -PirisPack=<dir|zip> [-PirisDump=<dir>]'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.koper.greenmarine.development.iris.IrisCoverage'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    args providers.gradleProperty('irisPack').getOrElse('')
+    if (providers.gradleProperty('irisDump').isPresent()) args providers.gradleProperty('irisDump').get()
 }
