@@ -21,6 +21,8 @@ public final class ShaderScreen extends Screen {
     private final Screen parent;
     private View view=View.SETTINGS;
     private int page;
+    private int columns=1;
+    private List<Row> displayedRows=List.of();
     private SettingsUiModel.Layout layout;
     private SettingsUiModel.Page pagination;
     private final List<Button> metricButtons=new ArrayList<>();
@@ -39,23 +41,38 @@ public final class ShaderScreen extends Screen {
     @Override public boolean isPauseScreen() { return false; }
 
     @Override protected void init() {
-        layout=SettingsUiModel.layout(width,height);metricButtons.clear();displayedMetrics=null;
+        int w=Math.max(1,Math.min(700,width-28)),x=(width-w)/2;
+        columns=view==View.SETTINGS&&width>=380?2:1;
+        int rowHeight=height>=220?38:24,pitch=rowHeight+4,body=84,nav=height-56;
+        int capacity=Math.max(1,(nav-body)/pitch);
+        layout=new SettingsUiModel.Layout(x,w,body,pitch,capacity,nav,height-28,24);
+        metricButtons.clear();displayedMetrics=null;
+        String[] tabs={"Overview","Shader packs","Lighting","Status"};View[] views={View.SETTINGS,View.PACKS,View.RAYS,View.STATUS};
+        for(int i=0;i<tabs.length;i++){
+            final View target=views[i];int tw=w/4;
+            addRenderableWidget(MarineUi.button(x+i*tw,52,tw-4,24,(view==target?"• ":"")+tabs[i],"Open "+tabs[i],()->open(target)));
+        }
         displayedStatus=ShaderRuntime.status();displayedRays=ShaderRuntime.rays();
-        var rows=rows();pagination=SettingsUiModel.page(page,rows.size(),layout.rows());page=pagination.index();
+        var rows=rows();displayedRows=rows;pagination=SettingsUiModel.page(page,rows.size(),layout.rows()*columns);page=pagination.index();
         for(int i=pagination.start();i<pagination.end();i++) {
             var row=rows.get(i);
-            var button=button(row.label(),row.help(),layout.bodyY()+(i-pagination.start())*layout.rowPitch(),row.action());
+            var button=button(row.label(),row.help(),layout.bodyY()+(i-pagination.start())/columns*layout.rowPitch(),row.action());
+            int column=(i-pagination.start())%columns;
+            button.setX(layout.x()+column*((layout.width()+6)/columns));
+            button.setWidth((layout.width()-6*(columns-1))/columns);
+            button.setHeight(layout.rowPitch()-4);
+            button.setMessage(Component.literal(font.plainSubstrByWidth(row.label(),button.getWidth()-14)));
             button.active=row.enabled();
             if(view==View.PERFORMANCE && i>0) metricButtons.add(button);
         }
         int gap=4,third=(layout.width()-2*gap)/3;
-        var previous=addRenderableWidget(Button.builder(Component.literal("<"),b->{page--;rebuildWidgets();})
+        var previous=addRenderableWidget(MarineUi.builder(Component.literal("<"),b->{page--;rebuildWidgets();})
             .bounds(layout.x(),layout.navigationY(),third,layout.buttonHeight()).build());
         previous.active=page>0;previous.setTooltip(Tooltip.create(Component.literal("Previous page")));
-        var middle=addRenderableWidget(Button.builder(Component.literal((page+1)+" / "+pagination.pages()),b->{page=0;rebuildWidgets();})
+        var middle=addRenderableWidget(MarineUi.builder(Component.literal((page+1)+" / "+pagination.pages()),b->{page=0;rebuildWidgets();})
             .bounds(layout.x()+third+gap,layout.navigationY(),third,layout.buttonHeight()).build());
         middle.setTooltip(Tooltip.create(Component.literal("Page "+(page+1)+" of "+pagination.pages()+". Press to return to the first page.")));
-        var next=addRenderableWidget(Button.builder(Component.literal(">"),b->{page++;rebuildWidgets();})
+        var next=addRenderableWidget(MarineUi.builder(Component.literal(">"),b->{page++;rebuildWidgets();})
             .bounds(layout.x()+2*(third+gap),layout.navigationY(),layout.width()-2*(third+gap),layout.buttonHeight()).build());
         next.active=page+1<pagination.pages();next.setTooltip(Tooltip.create(Component.literal("Next page")));
         button(view==View.SETTINGS?"Done":"Back to settings","Return to the previous screen",layout.doneY(),()->{
@@ -63,7 +80,7 @@ public final class ShaderScreen extends Screen {
         });
     }
     private Button button(String label,String help,int y,Runnable action) {
-        var button=addRenderableWidget(Button.builder(Component.literal(fit(label)),b->action.run())
+        var button=addRenderableWidget(MarineUi.builder(Component.literal(fit(label)),b->action.run())
             .bounds(layout.x(),y,layout.width(),layout.buttonHeight()).build());
         button.setTooltip(Tooltip.create(Component.literal(label+"\n"+help)));return button;
     }
@@ -149,12 +166,12 @@ public final class ShaderScreen extends Screen {
             }
             displayedMetrics=metrics;
         }
+        MarineUi.background(graphics,width,height,"Shaders / "+name(view),name(ShaderRuntime.status().state())+" | "+ShaderRuntime.capabilities().backend());
         super.extractRenderState(graphics,mouseX,mouseY,partialTick);
-        graphics.centeredText(font,fit("GreenMarine / "+name(view)),width/2,10,0xFFFFFFFF);
-        if(layout.bodyY()>=60) {
-            var status=ShaderRuntime.status();
-            graphics.centeredText(font,fit(name(status.state())+" | "+ShaderRuntime.capabilities().backend()+" | Ray path: "+name(ShaderRuntime.rays().effective())),width/2,30,(status.state()==PackStatus.State.FAILED?0xFFFF8888:status.state()==PackStatus.State.FALLBACK?0xFFFFCC88:0xFFAAEEDD));
-            graphics.centeredText(font,fit(status.detail()),width/2,44,0xFFCCCCCC);
+        if(layout.rowPitch()>=40)for(int i=pagination.start();i<pagination.end();i++){
+            var row=displayedRows.get(i);int index=i-pagination.start(),cw=(layout.width()-6*(columns-1))/columns;
+            String help=row.help().replace('\n',' ');
+            graphics.text(font,font.plainSubstrByWidth(help,cw-16),layout.x()+(index%columns)*((layout.width()+6)/columns)+7,layout.bodyY()+index/columns*layout.rowPitch()+24,MarineUi.MUTED,false);
         }
     }
 }

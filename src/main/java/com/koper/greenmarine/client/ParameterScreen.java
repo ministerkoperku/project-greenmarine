@@ -34,17 +34,17 @@ public final class ParameterScreen extends Screen {
             addRenderableWidget(new ParameterSlider(layout.bodyY()+(i-pagination.start())*layout.rowPitch(),parameter,current));
         }
         int gap=4,third=(layout.width()-2*gap)/3;
-        var previous=addRenderableWidget(Button.builder(Component.literal("< "+(page+1)),b->{page--;rebuildWidgets();})
+        var previous=addRenderableWidget(MarineUi.builder(Component.literal("< "+(page+1)),b->{page--;rebuildWidgets();})
             .bounds(layout.x(),layout.navigationY(),third,layout.buttonHeight()).build());
         previous.active=page>0;previous.setTooltip(Tooltip.create(Component.literal("Previous page")));
-        var reset=addRenderableWidget(Button.builder(Component.literal("Reset"),b->{
+        var reset=addRenderableWidget(MarineUi.builder(Component.literal("Reset"),b->{
             ShaderRuntime.apply(ShaderRuntime.settings().withoutParameters(pack.id()));error="";rebuildWidgets();
         }).bounds(layout.x()+third+gap,layout.navigationY(),third,layout.buttonHeight()).build());
         reset.setTooltip(Tooltip.create(Component.literal("Reset all parameters for "+pack.name()+" to their defaults. Other packs retain their values.")));
-        var next=addRenderableWidget(Button.builder(Component.literal(pagination.pages()+" >"),b->{page++;rebuildWidgets();})
+        var next=addRenderableWidget(MarineUi.builder(Component.literal(pagination.pages()+" >"),b->{page++;rebuildWidgets();})
             .bounds(layout.x()+2*(third+gap),layout.navigationY(),layout.width()-2*(third+gap),layout.buttonHeight()).build());
         next.active=page+1<pagination.pages();next.setTooltip(Tooltip.create(Component.literal("Next page")));
-        addRenderableWidget(Button.builder(Component.literal("Done"),b->onClose())
+        addRenderableWidget(MarineUi.builder(Component.literal("Done"),b->onClose())
             .bounds(layout.x(),layout.doneY(),layout.width(),layout.buttonHeight()).build());
     }
     @Override public void onClose() {ShaderRuntime.saveSettings();minecraft.gui.setScreen(parent);}
@@ -52,6 +52,8 @@ public final class ParameterScreen extends Screen {
     @Override public boolean isPauseScreen() {return false;}
     private String fit(String text) {return font.plainSubstrByWidth(text,Math.max(1,layout.width()-12));}
     @Override public void extractRenderState(GuiGraphicsExtractor graphics,int mouseX,int mouseY,float partialTick) {
+        graphics.fill(0,0,width,height,MarineUi.BG);
+        graphics.fill(0,0,3,height,MarineUi.ACCENT);
         super.extractRenderState(graphics,mouseX,mouseY,partialTick);
         graphics.centeredText(font,fit(title.getString()),width/2,10,0xFFFFFFFF);
         if(layout.bodyY()>=60) {
