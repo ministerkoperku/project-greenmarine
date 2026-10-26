@@ -15,7 +15,7 @@ if (developmentProbe) {
     }
 }
 def greenmarineJar = providers.gradleProperty('greenmarineJar').map { file(it) }
-    .getOrElse(file('../build/libs/greenmarine-0.9.10-prototype.jar'))
+    .getOrElse(file('../build/libs/greenmarine-0.9.11-prototype.jar'))
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
@@ -24,6 +24,7 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.12.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testRuntimeOnly 'org.luaj:luaj-jse:3.0.1'
 }
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(25) }
@@ -62,6 +63,11 @@ loom {
             runDir providers.gradleProperty('probeRunDir').getOrElse('run')
             if (developmentProbe) {
                 source sourceSets.probe
+                if (providers.gradleProperty('workspaceProbe').isPresent()) {
+                    vmArg '-Dgreenmarine.development.workspaceProbe=true'
+                    vmArg '-Xmx1024m'
+                    vmArg '-XX:ActiveProcessorCount=2'
+                }
                 vmArg '-Dgreenmarine.development.probe.output=' + providers.gradleProperty('probeOutput').getOrElse('probe-output')
             }
             vmArg '--enable-native-access=ALL-UNNAMED'
@@ -76,3 +82,39 @@ tasks.register('irisCoverage', JavaExec) {
     args providers.gradleProperty('irisPack').getOrElse('')
     if (providers.gradleProperty('irisDump').isPresent()) args providers.gradleProperty('irisDump').get()
 }
+
+// Embed the renderer's current authoring sources; never maintain a second API/doc copy.
+def shaderSdkResources = layout.buildDirectory.dir('generated/shader-sdk')
+def sdkRepositoryFiles = fileTree('..') {
+    include 'docs/*.md'
+    include 'src/main/resources/assets/greenmarine/shaders/include/*.glsl'
+    include 'src/main/java/com/koper/greenmarine/api/**/*.java'
+    include 'src/main/resources/assets/greenmarine/greenmarine/packs/raster.json'
+    include 'src/main/resources/assets/greenmarine/shaders/core/seabreeze_terrain.vsh'
+    include 'src/main/resources/assets/greenmarine/shaders/core/raster_terrain.fsh'
+    include 'src/main/resources/assets/greenmarine/shaders/core/seabreeze_sky.fsh'
+    include 'src/main/resources/assets/greenmarine/shaders/core/seabreeze_clouds.fsh'
+    include 'src/samples/resources/assets/greenmarine/greenmarine/packs/portable.json'
+    include 'src/samples/resources/assets/greenmarine/greenmarine/scripts/portable.lua'
+    include 'src/samples/resources/assets/greenmarine/shaders/core/pack_grade.fsh'
+    include 'src/samples/resources/assets/greenmarine/shaders/core/pack_lightmap.fsh'
+}
+tasks.register('generateShaderSdk') {
+    inputs.files(sdkRepositoryFiles)
+    outputs.dir(shaderSdkResources)
+    doLast {
+        def root = shaderSdkResources.get().asFile
+        delete root
+        copy { from sdkRepositoryFiles; into new File(root, 'greenmarine-sdk/repository') }
+        def repository = file('../').toPath().toAbsolutePath().normalize()
+        def rows = sdkRepositoryFiles.files.collect { source ->
+            def id = repository.relativize(source.toPath().toAbsolutePath().normalize()).toString().replace(File.separatorChar, '/' as char)
+            def category = id.startsWith('docs/') ? 'Documentation' : id.endsWith('.java') ? 'Java-only API' : id.contains('/include/') ? 'GLSL include' : 'Repository example'
+            id + '\t' + source.name + '\t' + category
+        }.sort()
+        new File(root, 'greenmarine-sdk/index.tsv').setText(rows.join('\n') + '\n', 'UTF-8')
+    }
+}
+sourceSets.main.resources.srcDir(shaderSdkResources)
+tasks.named('processResources') { dependsOn tasks.named('generateShaderSdk') }
+tasks.named('sourcesJar') { dependsOn tasks.named('generateShaderSdk') }

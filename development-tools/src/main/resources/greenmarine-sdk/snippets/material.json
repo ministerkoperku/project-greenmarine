@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "id": "demo:material",
+  "textures": {
+    "minecraft:textures/block/stone.png": {
+      "default": {"surface": "stone", "roughness": 0.8, "reflection": 0.05, "emission": 0}
+    }
+  }
+}

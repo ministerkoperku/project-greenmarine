@@ -3,10 +3,10 @@
   "id": "greenmarine_development",
   "version": "${version}",
   "name": "GreenMarine Development Tools",
-  "description": "Optional in-game shader and material authoring tools. Requires ordinary GreenMarine.",
+  "description": "In-game shaderpack project editor with automatic completion, embedded GreenMarine SDK and material tools.",
   "authors": ["Koper"],
   "environment": "client",
   "entrypoints": {"client": ["com.koper.greenmarine.development.DevelopmentClient"]},
   "mixins": ["greenmarine-development.mixins.json"],
-  "depends": {"fabricloader": ">=0.19.5", "minecraft": "26.3", "java": ">=25", "greenmarine": ">=0.9.10-prototype"}
+  "depends": {"fabricloader": ">=0.19.5", "minecraft": "26.3", "java": ">=25", "greenmarine": ">=0.9.11-prototype"}
 }

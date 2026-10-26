@@ -95,7 +95,18 @@ public final class MaterialCanvas {
         return new Saved(pack,pack.resolve("assets/greenmarine_dev/greenmarine/materials/"+key+".json"),pack.resolve("assets/greenmarine_dev/greenmarine/masks/"+key));
     }
     public Saved save(Path gameRoot,String texture) throws IOException {
-        endStroke();String target=canonicalTexture(texture),key=key(texture);var saved=paths(gameRoot,target);
+        return saveAt(gameRoot,paths(gameRoot,texture),texture);
+    }
+    public Saved saveToPack(Path pack,String texture) throws IOException {
+        pack=pack.toAbsolutePath().normalize();
+        Files.createDirectories(pack.getParent());
+        Path parent=pack.getParent().toRealPath();
+        pack=parent.resolve(pack.getFileName());
+        String key=key(texture);
+        return saveAt(parent,new Saved(pack,pack.resolve("assets/greenmarine_dev/greenmarine/materials/"+key+".json"),pack.resolve("assets/greenmarine_dev/greenmarine/masks/"+key)),texture);
+    }
+    private Saved saveAt(Path gameRoot,Saved saved,String texture) throws IOException {
+        endStroke();String target=canonicalTexture(texture),key=key(texture);
         var root=new JsonObject();root.addProperty("schema",1);root.addProperty("id","greenmarine_dev:"+key);
         var definition=new JsonObject();definition.addProperty("mask","greenmarine_dev:greenmarine/masks/"+key);
         var colors=new JsonObject();palette.forEach((rgb,material)->colors.add(String.format(Locale.ROOT,"%06x",rgb),GSON.toJsonTree(material)));
@@ -167,7 +178,13 @@ public final class MaterialCanvas {
         }
     }
     public static MaterialCanvas load(Path gameRoot,String texture)throws IOException{
-        var saved=paths(gameRoot,texture);
+        return loadAt(gameRoot,paths(gameRoot,texture),texture);
+    }
+    public static MaterialCanvas loadFromPack(Path pack,String texture)throws IOException {
+        pack=pack.toRealPath();String key=key(texture);
+        return loadAt(pack,new Saved(pack,pack.resolve("assets/greenmarine_dev/greenmarine/materials/"+key+".json"),pack.resolve("assets/greenmarine_dev/greenmarine/masks/"+key)),texture);
+    }
+    private static MaterialCanvas loadAt(Path gameRoot,Saved saved,String texture)throws IOException {
         preflight(gameRoot,saved.json());preflight(gameRoot,saved.mask());
         if(Files.size(saved.json())>262144||Files.size(saved.mask())>4*1024*1024)throw new IOException("Editor files exceed size limits");
         var root=JsonParser.parseString(Files.readString(saved.json())).getAsJsonObject();

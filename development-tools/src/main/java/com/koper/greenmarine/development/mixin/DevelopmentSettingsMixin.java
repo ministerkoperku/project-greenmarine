@@ -15,7 +15,6 @@ public abstract class DevelopmentSettingsMixin extends Screen {
     protected DevelopmentSettingsMixin(Component title) { super(title); }
     @Inject(method = "init", at = @At("TAIL"))
     private void greenmarineDevelopment$button(CallbackInfo ci) {
-        addRenderableWidget(Button.builder(Component.literal("Dev tools"), b -> minecraft.gui.setScreen(new WorkbenchScreen(this)))
-            .bounds(4, 4, 82, 20).build());
+        addRenderableWidget(com.koper.greenmarine.development.StudioUi.button(width-96,10,82,24,"Dev tools","Open shader and material authoring tools.",()->minecraft.gui.setScreen(new WorkbenchScreen(this))));
     }
 }

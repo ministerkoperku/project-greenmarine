@@ -15,11 +15,16 @@ import javax.imageio.ImageIO;
 /** Read-only preflight of affected selectable packs and API1 materials. Never publishes runtime state. */
 public final class ReloadValidator {
     private final Path shaderRoot, materialRoot;
+    private final Map<Path,String> overlays;
     private final Function<String,String> textFallback;
     private final Function<String,byte[]> binaryFallback;
     private static final Set<String> SURFACES = Set.of("opaque","matte","stone","wood","metal","puddle","water","glass","ice","porous","gem","diamond","coated","screen","polished");
 
     public ReloadValidator(Path shaderRoot, Path materialRoot, Function<String,String> textFallback, Function<String,byte[]> binaryFallback) {
+        this(shaderRoot,materialRoot,textFallback,binaryFallback,Map.of());
+    }
+    public ReloadValidator(Path shaderRoot,Path materialRoot,Function<String,String> textFallback,Function<String,byte[]> binaryFallback,Map<Path,String> overlays){
+        var normalized=new HashMap<Path,String>();overlays.forEach((path,text)->normalized.put(path.toAbsolutePath().normalize(),text));this.overlays=Map.copyOf(normalized);
         this.shaderRoot = shaderRoot.toAbsolutePath().normalize(); this.materialRoot = materialRoot.toAbsolutePath().normalize();
         this.textFallback = Objects.requireNonNull(textFallback); this.binaryFallback = Objects.requireNonNull(binaryFallback);
     }
@@ -45,8 +50,11 @@ public final class ReloadValidator {
                     ShaderPack definition = ShaderPack.parse(JsonParser.parseString(json).getAsJsonObject());
                     var stages = new LinkedHashMap<String,ShaderCompiler.Stage>();
                     for (var pass : definition.passes()) {
-                        fragment(stages, pass.fragment()); if (pass.fallback() != null) fragment(stages, pass.fallback());
-                        if (pass.spirv() != null) new ShaderBinary(resolver.binary(pass.spirv()));
+                        if(pass.stage()==PackPass.Stage.COMPUTE)stages.put(PackCatalog.computeResource(pass.fragment()),ShaderCompiler.Stage.COMPUTE);else fragment(stages, pass.fragment()); if (pass.fallback() != null) fragment(stages, pass.fallback());
+                        if (pass.spirv() != null) {
+                            try { new ShaderBinary(resolver.binary(pass.spirv())); }
+                            catch (RuntimeException error) { throw new IOException(pass.spirv() + ": " + error.getMessage(), error); }
+                        }
                     }
                     for (var program : definition.programs()) {
                         fragment(stages, program.fragment()); if (program.surface() != null) fragment(stages, program.surface());
@@ -63,12 +71,18 @@ public final class ReloadValidator {
                         if (!result.success()) throw new IOException("Compile failed for " + stage.getKey() + ": " + result.diagnostics());
                     }
                     if (definition.script() != null) resolver.requireText(definition.script(), 65536);
-                    for (String id : definition.materialAddons()) validateMaterial(id, resolver.requireText(id, 65536), resolver, budget);
+                    for (String id : definition.materialAddons()) {
+                        try { validateMaterial(id, resolver.requireText(id, 65536), resolver, budget); }
+                        catch (IOException | RuntimeException error) { throw new IOException(id + ": " + error.getMessage(), error); }
+                    }
                 }
             }
             if (materials && exists(materialRoot)) {
                 var resolver = new Resolver(materialRoot, changes, budget);
-                for (Path file : discover(materialRoot, "materials", 128)) validateMaterial(file.toString(), resolver.fileText(file, 262144), resolver, budget);
+                for (Path file : discover(materialRoot, "materials", 128)) {
+                    try { validateMaterial(file.toString(), resolver.fileText(file, 262144), resolver, budget); }
+                    catch (IOException | RuntimeException error) { throw new IOException(file + ": " + error.getMessage(), error); }
+                }
             }
             return null;
         } catch (IOException | RuntimeException ex) {
@@ -96,6 +110,9 @@ public final class ReloadValidator {
         String fileText(Path file, int limit) throws IOException { return decode(read(file, limit)); }
         byte[] read(Path file, int limit) throws IOException {
             checkLinks(file); byte[] bytes;
+            if(overlays.containsKey(file.toAbsolutePath().normalize())){
+                bytes=overlays.get(file.toAbsolutePath().normalize()).getBytes(StandardCharsets.UTF_8);if(bytes.length>limit)throw new IOException("Draft exceeds resource limit: "+file);budget.bytes(bytes.length);return bytes;
+            }
             if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Missing regular resource: " + file);
             try (var input = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS)) { bytes = input.readNBytes(limit + 1); }
             if (bytes.length > limit) throw new IOException("Resource exceeds " + limit + " bytes: " + file);

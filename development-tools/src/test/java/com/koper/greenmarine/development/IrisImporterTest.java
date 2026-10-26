@@ -33,6 +33,18 @@ class IrisImporterTest {
         assertTrue(Files.isRegularFile(destination.resolve("assets/iris_imported/greenmarine/packs/imported.json")));
         assertTrue(Files.readString(destination.resolve("IMPORT-REPORT.md")).contains("not full Iris runtime compatibility"));
     }
+    @Test void importsZipsWithASingleEnclosingFolder() throws Exception {
+        Path archive=zip("wrapped.zip",Map.of("Pretty Pack/shaders/final.fsh",LEGACY,"Pretty Pack/LICENSE.txt","owner license"));
+        var result=IrisImporter.convert(archive,temp.resolve("wrapped-import"));
+        assertTrue(result.runnable(),result.diagnostics().toString());
+        assertEquals("owner license",Files.readString(result.destination().resolve("iris-source/LICENSE.txt")));
+    }
+    @Test void selectingTheShadersDirectoryImportsItsPack() throws Exception {
+        Path original=directory("pack",Map.of("shaders/final.fsh",LEGACY,"LICENSE.txt","owner license"));
+        var result=IrisImporter.convert(original.resolve("shaders"),temp.resolve("shader-folder-import"));
+        assertTrue(result.runnable(),result.diagnostics().toString());
+        assertEquals("owner license",Files.readString(result.destination().resolve("iris-source/LICENSE.txt")));
+    }
     @Test void convertsModernZipWithDepthSamplerAndRootRelativeInclude() throws Exception {
         String fragment="#version 330 compatibility\n#include \"/lib/effect.glsl\"\nuniform sampler2D colortex0; uniform sampler2D depthtex0;\nin vec2 texcoord; layout(location=0) out vec4 color;\nvoid main(){color=texture(colortex0,texcoord)*effect(texture(depthtex0,texcoord).r);}";
         Path zip=zip("modern.zip",Map.of("shaders/composite.fsh",fragment,"shaders/lib/effect.glsl","float effect(float depth){return clamp(depth,0.0,1.0);}",

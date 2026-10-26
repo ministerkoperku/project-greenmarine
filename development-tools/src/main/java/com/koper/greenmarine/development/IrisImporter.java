@@ -25,10 +25,20 @@ public final class IrisImporter {
     public static Report convert(Path source, Path destination) throws IOException {
         Path input = source.toAbsolutePath().normalize(), output = destination.toAbsolutePath().normalize();
         checkAncestors(input); checkAncestors(output);
+        if(Files.isDirectory(input,LinkOption.NOFOLLOW_LINKS)&&input.getFileName()!=null&&input.getFileName().toString().equals("shaders"))input=input.getParent();
         if (Files.exists(output, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Import destination already exists");
         if (Files.isDirectory(input, LinkOption.NOFOLLOW_LINKS) && output.startsWith(input))
             throw new IOException("Import destination cannot be inside the original pack");
         var snapshot = snapshot(input);
+        if(snapshot.keySet().stream().noneMatch(name->name.startsWith("shaders/"))&&!snapshot.isEmpty()){
+            String first=snapshot.keySet().iterator().next();int slash=first.indexOf('/');
+            if(slash>0){
+                String prefix=first.substring(0,slash+1);
+                if(snapshot.keySet().stream().allMatch(name->name.startsWith(prefix))){
+                    var unwrapped=new LinkedHashMap<String,byte[]>();snapshot.forEach((name,bytes)->unwrapped.put(name.substring(prefix.length()),bytes));snapshot=unwrapped;
+                }
+            }
+        }
         if (snapshot.keySet().stream().noneMatch(name -> name.startsWith("shaders/"))) throw new IOException("No Iris shaders/ directory found");
         var diagnostics = new ArrayList<String>();
         diagnostics.add("Source snapshot and limited fullscreen conversion; not full Iris runtime compatibility.");

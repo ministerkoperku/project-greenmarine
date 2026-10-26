@@ -1,6 +1,6 @@
 # GreenMarine Development Tools
 
-Optional authoring addon for ordinary GreenMarine0.9.10+, Minecraft26.3,
+Optional authoring addon for ordinary GreenMarine0.9.11-prototype+, Minecraft26.3,
 Java25 and Fabric Loader0.19.5+. Fabric API and KoperLib are not required.
 Install the addon beside one ordinary GreenMarine renderer jar. Removing the
 addon removes its tools without replacing the renderer or changing world saves.
@@ -20,28 +20,105 @@ claimed for those pre-existing local changes.
 Press F9 in the world, or F6 → Dev tools (touch accessible). Tools do not turn on
 profiling or switch shaderpacks merely by opening them.
 
-- New editable shader pack creates a unique folder in shaderpacks/greenmarine.
-- Edit directory shaderpacks lists bounded source files; ZIP packs stay read-only.
-- Import Iris pack creates an editable project and an explicit compatibility report.
-- Development settings contains auto reload, verbose debug, and the optional Slang path.
-- Paint material masks opens the palette painter.
-- Renderer/pass diagnostics show actual readiness, current source snapshot,
-  declared pass scale/format/inputs, and separately measured CPU/GPU stage times.
-  Declared pass data is not an actual allocation or GPU-time measurement.
+- New shaderpack project opens the SDK wizard: choose a namespace, display name and
+  fullscreen, compute or world starter. Each project gets its own directory.
+- Open shaderpack project opens source files in a shared project session.
+- Import Iris pack preserves sources and creates an explicit compatibility report.
+- Settings contains auto reload, verbose debug, the optional Slang path and UI size.
+- Material studio opens the palette painter.
+- Diagnostics reports renderer/pass readiness and separately measured CPU/GPU costs.
+
+## Shaderpack projects and the embedded SDK
+
+The workspace uses a default left explorer, document tabs, a compact menu bar and
+one large editing area. `+F` in the explorer creates a file; `+D` creates a folder.
+Type the name directly in the explorer and press Enter. Escape cancels. Paths are
+relative to the selected folder; nested paths work. The extension chooses a source
+template; `.png` creates a transparent 32×32 texture. SDK templates remain available
+under Create when a more detailed starter is useful.
+
+Click a file to open it or a folder to expand it. Double-click either to rename it
+inline, or use F2. Folder rename preserves open documents, unsaved PNG/text edits
+and caret positions. Empty folders are visible. File contains asset import,
+rename, two-step deletion and whole-project ZIP export.
+
+View splits the editor right or down, or returns to one group. Drag the explorer
+edge or the divider between editor groups to resize them. Opening a tab or explorer
+file targets the active group. Two views of one source share edits. Resizing updates the existing widgets and
+retains text input focus, caret and selection. Narrow windows
+use a horizontal split when two code columns would leave too little room.
+
+PNG files open as editable canvases in the workspace. Enter a brush color as
+`#RRGGBB` or `#AARRGGBB`, click/move/click to paint with a virtual mouse, right-click
+to pick a color, and use Undo, Erase or brush size in the canvas toolbar. Wheel zooms
+around the selected area. Ctrl+Z undoes a stroke; E toggles the eraser when the
+canvas has focus. PNG drafts join Save and ZIP export and are checked for external
+file changes before replacement. The painter supports PNG textures up to 256×256.
+
+Open documents have tabs. Draft text, PNG pixels and caret positions survive switching files
+and navigating through the SDK. Dirty projects are retained when clean sessions
+are evicted. Drafts are session memory until Save or ZIP export; restarting the
+process does not promise unsaved-draft recovery.
+
+SDK opens an offline searchable catalog generated from the current renderer
+checkout: documentation, every engine GLSL include, public API source and code
+examples. Java-only APIs are explicitly labeled reference; they are not executed
+by shaderpack scripts. The authoring reference covers the current schema,
+parameters, scene/lightmap/compute passes, named inputs, resources/images/buffers,
+world programs, surface/ray flags, histories, Lua, materials and SPIR-V/Slang limits.
+SDK templates can be inserted at the caret or copied. New file offers dedicated
+scene, lightmap, compute, include, vertex/world, Lua, material and manifest templates.
+
+Check validates every project manifest and declared shader stage against the
+snapshot of all unsaved documents, including unsaved includes and manifests.
+It validates bounded Lua initialization without ticking scripts, material masks
+and SPIR-V, and checks external loader resource/count/byte limits. Problems identify
+the file and line; the issue strip cycles through them. Save performs this preflight,
+checks externally changed dirty sources, saves all documents transactionally and
+reloads resources. Runtime renderer status is still the authority for GPU compatibility.
+
+## Workspace size and virtual mouse
+
+UI size is available in the workbench, painter, source editor and settings. It changes
+Minecraft's saved GUI scale: 1x gives the smallest controls and the most workspace;
+Auto and higher factors enlarge controls. Pointer coordinates use the game's own
+scale. This affects other Minecraft menus as well.
+
+The workspace keeps menus at the top, tabs immediately below, and status/problems
+at the bottom. Check validates the project; Save saves every changed document and
+reloads resources. Ctrl+N creates a file, Ctrl+S saves all, Ctrl+Enter checks the
+project and Ctrl+\ splits the editor. SDK is under Help (also Tools on compact
+windows). Tools retains standalone compilation, source-copy and SPIR-V export.
+Interface scale is under View.
+
+The material workspace has a large mask canvas and a persistent scrollable
+inspector with the target texture, surface preset, mask regions and sliders for
+roughness, reflection and emission. Preview switches the canvas to an illustrative
+lit cube that responds to the sliders. This CPU preview is not in-world shader or
+hardware RT acceptance. The original texture is preserved; the mask assigns
+surface properties. Pen/Drag/Pan, erase, undo, wheel zoom, mask/albedo views, saved
+mask loading and explicit resource-pack export remain available. Resize and source
+override are farther down the inspector. Scroll over the inspector to reach them.
 
 ## Shader editor and compilers
 
+The authoring workspace uses a neutral dark theme, restrained blue accents, compact
+menus and flat explorer rows. The editor area occupies the main window.
+
 The editor keeps unsaved session drafts and has line numbers, GLSL syntax colors,
 auto-indent (Enter keeps indentation, `{` indents, `}` dedents) and Tab as four spaces.
-Compiler errors and warnings mark their line in the gutter; the bar under the editor
-shows the current one and jumps to the next on click. Lines inside `#include`d files
-land on the `#include` line with the include id in the message. Full compiler output
-is in the Compile button tooltip. Compile never
-writes files. Save + reload is enabled only for the exact successfully compiled
-GLSL vertex/fragment candidate, or a validated JSON document. Failed compilation
-keeps the previous file bytes. Actual runtime program status remains authoritative;
-source compilation does not prove a pipeline or binding layout is compatible.
-Select the created preview pack in F6 after resource reload to see its effect.
+Suggestions open automatically next to the caret while typing. They cover GLSL
+functions/types/keywords, project identifiers and includes, GreenMarine frame/binding
+names, schema JSON keys/enums and the Lua authoring API. Up/Down selects; Tab or
+Enter inserts; Escape dismisses the popup without leaving the editor. Clicking a
+popup row with a virtual mouse inserts it and keeps text focus. There is no separate
+suggestion button. Function insertions place the caret inside parentheses.
+This is lexical/project assistance with offline references, not a semantic language
+server or a claim that every API token is legal in every shader stage.
+
+Compiler errors and warnings mark source lines. Include errors map back to the
+include directive. Standalone compilation and binary export are in Tools;
+project-wide Check/Save use every referenced stage, including compute (.csh).
 
 GLSL compiles through Minecraft's bundled LWJGL Shaderc to Vulkan SPIR-V, including
 vertex, fragment and compute stages. GLSL330 version lines are normalized for
@@ -66,12 +143,31 @@ layout is not provided by this addon.
 **Planned:** a Slang in-game test on desktop (real `slangc`, PC) is scheduled for when
 the owner is back home. Until then Slang support is untested end to end.
 
-Export SPIR-V writes a content-named .spv under greenmarine-development/compiled.
-It does not automatically bind a binary to a pack. Slang and compute compilation
-are compiler tools, not a new compute shaderpack execution API. Includes and Lua
+Export SPIR-V opens the in-game path browser for a file name and destination you choose.
+It does not automatically bind a binary to a pack. Slang compilation remains an optional compiler tool. Compute passes use the current
+GreenMarine shaderpack API and require its initialized Vulkan compute path. Includes and Lua
 can be inspected; standalone validation of those fragments may require a wrapper.
 
+## Complete shaderpack export
+
+Pack ZIP in the source editor exports the complete containing project. Choose a name
+and destination with the file browser. ZIP entries start at the pack root and include
+all manifests, shaders, includes, textures, scripts, licenses and project reports.
+Include unsaved sources overlays every changed project document inside the archive;
+it does not write drafts to the project. An unfinished draft may not compile.
+
+Imported Iris projects also expose Export ZIP. Their archives include preserved
+original sources and IMPORT-REPORT.md. Exporting does not turn an unsupported Iris
+project into a runnable GreenMarine pack. Source-copy and SPIR-V export remain
+separate actions in Tools. Exports are staged before replacing an existing ZIP.
+
 ## Material painter
+
+Open Material / block lighting under Create. The canvas and inspector stay in the
+same screen. Load texture previews the target albedo; adjust material sliders for
+the selected mask region and paint that region over the texture. Preview offers a
+lit-cube illustration; Paint returns to the mask canvas. Save and Save as write a
+normal material resource pack. This format continues to use per-texture masks.
 
 Enter the runtime target texture ID, such as mechanics_dream:textures/craftbot.png.
 Load albedo finds a mounted texture or a Kodel-style fullpack asset in mod roots.
@@ -80,14 +176,21 @@ at most256×256 PNGs, without editing their source colors. New selects a bounded
 canvas; Load opens this editor's previously saved mask. Set canvas dimensions to match
 the source texture for precise per-texel painting.
 
-Choose a palette color, set surface/roughness/reflection/emission, and paint.
+Choose a mask region, set its surface and roughness/reflection/emission sliders, and paint.
 Palette colors are metadata, not new albedo colors. White motifs can receive the
 same material as their blue rectangle, or a separate palette profile. Erase
 restores earlier layers/fallbacks. Undo, visible zoom buttons, touch Paint/Pan mode, mouse-wheel zoom, right-drag pan
 and brush sizes are available;
 unsaved drafts survive screen navigation within this game session.
 
-Save pack writes editable PNG+JSON to resourcepacks/greenmarine-development-materials.
+Save pack writes editable PNG+JSON to the current destination, initially
+resourcepacks/greenmarine-development-materials. Save as opens an in-game folder
+browser with Parent, Game folder and Documents shortcuts, an editable directory path
+and a pack-folder name or absolute path. Empty name uses the current folder.
+Existing destinations require a second Save press to confirm. Later Save pack uses
+the chosen destination, including after navigating away and restoring the session.
+External exports do not automatically enter Minecraft's resource-pack list; copy
+the pack into the instance's resourcepacks directory to enable it.
 Enable that pack in Options → Resource Packs, above older material overrides,
 then reload resources. Saving does not silently enable it. Generic definitions
 layer through GreenMarine API1; per-shaderpack targeting remains editable in JSON.
@@ -115,7 +218,12 @@ validation layers and do not turn a selected-but-unavailable RT path into suppor
 
 ## Iris source conversion
 
-Choose an Iris ZIP/directory in the importer (or drop one onto its screen).
+Choose Browse and import Iris ZIP / folder. The in-game picker lists ZIPs and
+folders, has name filtering and shortcuts to shaderpacks, Downloads and Documents.
+Clicking a ZIP starts import; for a directory, open it and choose Import this folder.
+A single enclosing directory in an archive is unwrapped automatically. Selecting the
+shaders directory itself selects its enclosing pack. Dropping a path or typing one
+in the importer remains available.
 The original archive stays untouched. A supported single fullscreen final or
 composite effect produces an editable GLSL GreenMarine project. World programs,
 multiple render targets, extra passes and unsupported uniforms are preserved for
@@ -133,7 +241,8 @@ From the repository root:
 ./gradlew -p development-tools test build
 ```
 
-The addon compiles against ../build/libs/greenmarine-0.9.10-prototype.jar. Override
+The addon defaults to ../build/libs/greenmarine-0.9.11-prototype.jar. The workspace
+rebuild was verified with `-PgreenmarineJar=/absolute/path/to/greenmarine-0.9.11-prototype-dhfix1.jar`. Override
 with -PgreenmarineJar=/absolute/path/to/greenmarine.jar when needed. Build outputs
 are separate: the root renderer jar and development-tools/build/libs addon jar.
 Build a standalone CLI distribution with `./gradlew -p development-tools irisConverterDistribution`.
