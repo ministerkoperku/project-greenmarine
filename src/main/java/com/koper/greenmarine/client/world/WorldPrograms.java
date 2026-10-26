@@ -121,7 +121,7 @@ public final class WorldPrograms {
     /** Before the scene passes: Solstice lighting for Distant Horizons LODs (no-op without DH). */
     public static void renderDistant(GameRenderer renderer) {
         boolean active=DistantTerrain.LOADED && enabled() && DistantTerrain.shades(ShaderRuntime.active());
-        DistantTerrain.override(active);
+        active=DistantTerrain.override(active && renderer.gameRenderState().shouldRenderLevel);
         if(!active || !renderer.gameRenderState().shouldRenderLevel)return;
         try {DISTANT.render(renderer.mainRenderTarget(),RenderSystem.getDevice().createCommandEncoder(),ShaderRuntime.active(),frame,surface,environment,renderer.levelLightmap(),heightField);}
         catch(RuntimeException|LinkageError error) {fail(error);}

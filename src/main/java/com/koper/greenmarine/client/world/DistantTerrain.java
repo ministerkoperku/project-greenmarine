@@ -25,7 +25,8 @@ final class DistantTerrain implements AutoCloseable {
     static final boolean LOADED=net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("distanthorizons");
     private static final String FRAGMENT="greenmarine:core/solstice_distant";
     private static Bridge bridge;
-    private static boolean bridgeFailed,overriding;
+    private static boolean bridgeFailed;
+    private static final DistantRenderState STATE=new DistantRenderState();
     private final ByteBuffer projection=ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder());
     private CompiledRenderPipeline compiled;
     private PackCatalog.LoadedPack owner;
@@ -39,10 +40,10 @@ final class DistantTerrain implements AutoCloseable {
     }
 
     /** DH's own fog and LOD shading would double ours; hand them back as soon as we stop shading. */
-    static void override(boolean active) {
-        if(!LOADED || active==overriding || bridge()==null)return;
-        try {bridge.override(active);overriding=active;}
-        catch(ReflectiveOperationException|RuntimeException error) {disable(error);}
+    static boolean override(boolean requested) {
+        if(!LOADED || bridge()==null)return false;
+        try {return STATE.update(requested,requested && bridge.renderingEnabled(),bridge::override);}
+        catch(ReflectiveOperationException|RuntimeException error) {disable(error);return false;}
     }
 
     void render(RenderTarget main,CommandEncoder encoder,PackCatalog.LoadedPack pack,GpuBuffer marineFrame,GpuBuffer surface,
@@ -50,13 +51,16 @@ final class DistantTerrain implements AutoCloseable {
         if(!LOADED)return;
         if(bridge()==null) {report("Distant Horizons bridge not ready");return;}
         GpuTextureView depth;float[] clip;
-        try {depth=bridge.depth();clip=bridge.clip();}
+        try {
+            if(!bridge.renderingEnabled()) {override(false);return;}
+            depth=bridge.depth();clip=bridge.clip();
+        }
         catch(ReflectiveOperationException|RuntimeException error) {disable(error);return;}
         if(depth==null || depth.getWidth(0)!=main.width || depth.getHeight(0)!=main.height) {
             report("Distant Horizons depth unavailable or mismatched: "+(depth==null?"null":depth.getWidth(0)+"x"+depth.getHeight(0))+" vs "+main.width+"x"+main.height);
             return;
         }
-        report("Distant Horizons LOD lighting active: depth "+depth.getWidth(0)+"x"+depth.getHeight(0)+" "+depth.texture().getFormat()+", clip "+java.util.Arrays.toString(clip));
+        report("Distant Horizons LOD lighting active: depth "+depth.getWidth(0)+"x"+depth.getHeight(0)+" "+depth.texture().getFormat());
         var targetFormat=main.getColorTexture().getFormat();
         if(compiled==null || owner!=pack || targetFormat!=format) {
             closePipeline();
@@ -116,20 +120,25 @@ final class DistantTerrain implements AutoCloseable {
         if(state.equals(reported))return;reported=state;GreenMarine.LOGGER.info(state);
     }
     private static void disable(Throwable error) {
-        bridgeFailed=true;bridge=null;overriding=false;
+        if(bridge!=null) {
+            try {STATE.update(false,false,bridge::override);}
+            catch(ReflectiveOperationException|RuntimeException cleanup) {error.addSuppressed(cleanup);}
+        }
+        bridgeFailed=true;bridge=null;
         GreenMarine.LOGGER.warn("Distant Horizons LOD lighting disabled: {}",error.toString());
     }
 
     private void closePipeline() {if(compiled!=null)compiled.close();compiled=null;owner=null;format=null;}
     private void closeColor() {if(colorView!=null)colorView.close();if(color!=null)color.close();colorView=null;color=null;}
     @Override public void close() {
+        override(false);
         closePipeline();closeColor();if(frame!=null)frame.close();frame=null;
     }
 
     /** DH API 3.x by name: render proxy textures, RenderUtil clip planes (as RenderUtil.setDhProjectionMatrix), config overrides. */
     private static final class Bridge {
-        private final Object renderProxy,enableFog,lodShading,shadingDisabled;
-        private final Method depthWrapper,depthDirection,near,heightNear,far,setValue,clearValue;
+        private final Object renderProxy,enableFog,lodShading,shadingDisabled,renderingEnabled;
+        private final Method depthWrapper,depthDirection,depthRange,near,heightNear,far,setValue,clearValue,getValue;
         private final java.lang.reflect.Field payload;
         private Method textureView;
         Bridge() throws ReflectiveOperationException {
@@ -139,12 +148,14 @@ final class DistantTerrain implements AutoCloseable {
             if(renderProxy==null || configs==null)throw new IllegalStateException("Distant Horizons API not initialized yet");
             var proxy=Class.forName("com.seibel.distanthorizons.api.interfaces.render.IDhApiRenderProxy");
             depthWrapper=proxy.getMethod("getDhDepthTextureBlazeWrapper");depthDirection=proxy.getMethod("getDepthDirection");
+            depthRange=proxy.getMethod("getDepthRange");
             payload=Class.forName("com.seibel.distanthorizons.api.objects.DhApiResult").getField("payload");
             var util=Class.forName("com.seibel.distanthorizons.core.util.RenderUtil");
             near=util.getMethod("getNearClipPlaneInBlocks");heightNear=util.getMethod("getHeightBasedNearClipOverrideBlockDistance");
             far=util.getMethod("getFarClipPlaneDistanceInBlocks");
             Object graphics=Class.forName("com.seibel.distanthorizons.api.interfaces.config.IDhApiConfig").getMethod("graphics").invoke(configs);
             var graphicsType=Class.forName("com.seibel.distanthorizons.api.interfaces.config.client.IDhApiGraphicsConfig");
+            renderingEnabled=graphicsType.getMethod("renderingEnabled").invoke(graphics);
             Object fog=graphicsType.getMethod("fog").invoke(graphics);
             enableFog=Class.forName("com.seibel.distanthorizons.api.interfaces.config.client.IDhApiFogConfig").getMethod("enableDhFog").invoke(fog);
             lodShading=graphicsType.getMethod("lodShading").invoke(graphics);
@@ -153,6 +164,10 @@ final class DistantTerrain implements AutoCloseable {
             shadingDisabled=disabled;
             var value=Class.forName("com.seibel.distanthorizons.api.interfaces.config.IDhApiConfigValue");
             setValue=value.getMethod("setValue",Object.class);clearValue=value.getMethod("clearValue");
+            getValue=value.getMethod("getValue");
+        }
+        boolean renderingEnabled() throws ReflectiveOperationException {
+            return Boolean.TRUE.equals(getValue.invoke(renderingEnabled));
         }
         GpuTextureView depth() throws ReflectiveOperationException {
             Object wrapper=payload.get(depthWrapper.invoke(renderProxy));
@@ -160,19 +175,18 @@ final class DistantTerrain implements AutoCloseable {
             if(textureView==null)textureView=wrapper.getClass().getMethod("getTextureView");
             return (GpuTextureView)textureView.invoke(wrapper);
         }
-        /** m22, m23, zero-to-one range, reverse Z: view distance = m23/(ndc+m22). */
+        /** m22, m23, depth range, direction: view distance = m23/(ndc+m22). */
         float[] clip() throws ReflectiveOperationException {
             float n=(float)near.invoke(null),f=(float)far.invoke(null);
             if((float)heightNear.invoke(null)==-1f)n=Math.min(n,7.5f);
-            boolean reverse="REVERSE_Z".equals(String.valueOf(depthDirection.invoke(renderProxy)));
-            // RenderUtil.setClipPlanes(matrix, a, b, zeroToOne) with (near, far, false) or (far, near, true).
-            float a=reverse?f:n,b=reverse?n:f;
-            float m22=(reverse?b:b+a)/(a-b),m23=(reverse?b:b+b)*a/(a-b);
-            return new float[]{m22,m23,reverse?1:0,reverse?1:0};
+            return DistantProjection.clip(n,f,String.valueOf(depthRange.invoke(renderProxy)),String.valueOf(depthDirection.invoke(renderProxy)));
         }
         void override(boolean active) throws ReflectiveOperationException {
             if(active) {setValue.invoke(enableFog,Boolean.FALSE);setValue.invoke(lodShading,shadingDisabled);}
-            else {clearValue.invoke(enableFog);clearValue.invoke(lodShading);}
+            else {
+                try {clearValue.invoke(enableFog);}
+                finally {clearValue.invoke(lodShading);}
+            }
         }
     }
 }
