@@ -20,11 +20,16 @@ def main():
     parser.add_argument('--scene',action='store_true',help='Verify that the scene pass preserves already shaded terrain')
     parser.add_argument('--distance',type=float,default=.15)
     parser.add_argument('--slope',type=float,default=.08)
-    parser.add_argument('--divisor',type=int,default=4,choices=(2,4))
+    parser.add_argument('--divisor',type=int,default=4,choices=(2,3,4))
     parser.add_argument('--occluder',action='store_true',help='Add a closer parallel metal surface with a different reflected color')
     parser.add_argument('--check-confidence',action='store_true',help='Require partial producer coverage to fade native reflection')
     parser.add_argument('--probe-phase',type=float,default=0.0,help='Subpixel horizontal reconstruction probe offset')
     parser.add_argument('--check-diffuse',action='store_true',help='Require a continuous lighting probe across the native quarter-block seed boundary')
+    parser.add_argument('--lighting-seams',action='store_true',help='Reconstruct lighting across coplanar diffuse material boundaries')
+    parser.add_argument('--lighting-step',action='store_true',help='Check Ultra shadow interpolation across a reduced-resolution light edge')
+    parser.add_argument('--lighting-corner',action='store_true',help='Check that rejected taps from the other face do not restore unshadowed light')
+    parser.add_argument('--check-pairs',action='store_true',help='Require neighboring diagnostic samples to stay continuous')
+    parser.add_argument('--volumetric-test',action='store_true',help='Initialize a fully sunlit 48-block outdoor march')
     args=parser.parse_args()
     width,height=320,180
     egl = c.CDLL('libEGL.so.1')
@@ -97,6 +102,9 @@ def main():
     '''
     if args.scene:
         fragment_body='layout(location=0) out vec4 fragColor; void main(){fragColor=vec4(solDisplay(solScene(gl_FragCoord.xy/Frame.xy)),1);}'
+    elif args.lighting_seams or args.lighting_step or args.lighting_corner:
+        fragment_body=fragment_body.replace(' || floor(material.a)!=2.0','').replace('vec4 lighting,reflection;','vec4 lighting,reflection;float support;').replace('true,lighting,reflection);','true,lighting,reflection,support);').replace('vec4(reflection.rgb*reflection.a,1)','vec4(lighting.rgb,1)*support')
+        if args.lighting_corner:fragment_body=fragment_body.replace('vec4(lighting.rgb,1)*support','vec4(lighting.rgb*support+vec3(.4)*(1.0-support),1)')
     elif args.probe_phase:
         fragment_body=fragment_body.replace('gl_FragCoord.xy/Frame.xy',f'(gl_FragCoord.xy+vec2({args.probe_phase:.8f},0.0))/Frame.xy')
     fragment=shader(0x8B30,'#version 450\n'+common+fragment_body)
@@ -108,12 +116,16 @@ def main():
     gl('glUseProgram',None,c.c_uint)(program)
     aspect=width/height
     frame=[0.0]*72;frame[:8]=[width,height,0,0,1,1,2,0]
+    if args.lighting_step or args.lighting_corner:frame[5]=3
     frame[40+6]=1;frame[40+8]=1;frame[40+10]=1
+    if args.volumetric_test:frame[40+28]=1
     frame[8:24]=[aspect,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0]
     for i in range(4):frame[24+i*5]=1
     environment=[0.0]*32;environment[11]=1
     ray_frame=[1,96,0,0,-96,-96,-96,0,96,96,96,0,0,0,0,0,.45,0,0,0]
-    for binding,(name,values) in enumerate([('MarineFrame',frame),('MarineSurfaceFrame',[0.0]*32),('RaySurfaceFrame',[1,1,1,96]),('MarineEnvironment',environment),('RayFrame',ray_frame)]):
+    surface_frame=[0.0]*32
+    if args.volumetric_test:surface_frame[8:12]=[0,1,0,1];environment[24]=1
+    for binding,(name,values) in enumerate([('MarineFrame',frame),('MarineSurfaceFrame',surface_frame),('RaySurfaceFrame',[1,1,1,96]),('MarineEnvironment',environment),('RayFrame',ray_frame)]):
         index=gl('glGetUniformBlockIndex',c.c_uint,c.c_uint,c.c_char_p)(program,name.encode())
         if index==0xffffffff:continue
         gl('glUniformBlockBinding',None,c.c_uint,c.c_uint,c.c_uint)(program,index,binding)
@@ -128,10 +140,13 @@ def main():
         for x in range(width):
             sx=((x+.5)/width*2-1)*aspect
             depth=(nx*sx+nz)/args.distance
+            if args.lighting_corner:depth=(nx*abs(sx)+nz)/args.distance
             foreground=args.occluder and 0<depth<.45 and height*.28<y<height*.72
             mirror=0<depth<1 and not foreground
-            normals.extend([-nx,0,-nz,depth*2 if foreground else depth] if mirror or foreground else [0,0,0,0])
-            materials.extend([.6,.2,.08,2.2] if mirror or foreground else [0,0,0,1.45])
+            face_x=-nx*(1 if sx>=0 else -1) if args.lighting_corner else -nx
+            normals.extend([face_x,0,-nz,depth*2 if foreground else depth] if mirror or foreground else [0,0,0,0])
+            material_class=(1.0 if x%2==0 else 7.0) if args.lighting_seams else 2.0
+            materials.extend([.6,.2,.08,material_class+.2] if mirror or foreground else [0,0,0,1.45])
             valid.append(mirror)
             foregrounds.append(foreground)
     ow=(width-1)//args.divisor+1;oh=(height-1)//args.divisor+1
@@ -140,8 +155,11 @@ def main():
         for x in range(ow):
             cx=((x*2+1)*width)//(ow*2);cy=((y*2+1)*height)//(oh*2)
             hit=valid[cy*width+cx]
-            rays.extend([.15,.7,1,1] if hit else ([1,0,0,1] if foregrounds[cy*width+cx] else [0,0,0,0]));lights.extend([1,1,1,1])
+            rays.extend([.15,.7,1,1] if hit else ([1,0,0,1] if foregrounds[cy*width+cx] else [0,0,0,0]))
+            energy=0.0 if args.lighting_corner else (float(x>=int(ow*.55)) if args.lighting_step else 1.0)
+            lights.extend([energy,energy,energy,1])
     textures=[('MarineSurfaceNormalDepth',width,height,normals),('MarineSurfaceAlbedo',width,height,materials),('RayReflection',ow,oh,rays),('RaySurfaceLighting',ow,oh,lights)]
+    if args.volumetric_test:textures.append(('RaySurfaceExtra',ow,oh,array('f',[1,1,48,1])*(ow*oh)))
     if args.scene:
         textures += [('SceneSampler',width,height,array('f',[.35,.35,.35,1])*(width*height)),
                      ('DepthSampler',width,height,array('f',(v for i in range(width*height) for v in [normals[i*4+3],0,0,0])))]
@@ -172,6 +190,30 @@ def main():
         raise AssertionError(f'Constant angular lighting must not jump at a world sampling-grid boundary: {blue_range}')
     if args.check_confidence and not (blue_range and 0<blue_range[0]<200 and blue_range[1]>250):
         raise AssertionError(f'Partial producer footprint must fade instead of becoming a full-strength island: {blue_range}')
+    if args.lighting_seams:
+        failures=[(x,y,list(pixels[(y*width+x)*4:(y*width+x)*4+3]))
+                  for y in range(8,height-8) for x in range(8,width-8)
+                  if all(valid[y*width+x+dx] for dx in range(-8,9))
+                  and min(pixels[(y*width+x)*4:(y*width+x)*4+3])<250]
+        if failures:raise AssertionError(f'Coplanar material boundaries must retain constant irradiance: {len(failures)} pixels, first {failures[:3]}')
+    if args.lighting_step:
+        y=height//2
+        values=[pixels[(y*width+x)*4] for x in range(8,width-8)
+                if all(valid[y*width+x+dx] for dx in range(-8,9))]
+        jump=max(abs(a-b) for a,b in zip(values,values[1:]))
+        if min(values)>5 or max(values)<250 or jump>90:
+            raise AssertionError(f'Ultra must interpolate a shadow edge without deleting either endpoint: range={min(values),max(values)}, largest step={jump}')
+    if args.lighting_corner:
+        y=height//2
+        values=[pixels[(y*width+x)*4] for x in range(width//2-6,width//2+6)]
+        if max(values)>1:raise AssertionError(f'A shadowed corner must not restore the unshadowed fallback: {values}')
+    if args.check_pairs:
+        pairs=[abs(pixels[(y*width+x)*4]-pixels[(y*width+x+1)*4])
+               for y in range(height) for x in range(0,width-1,2) if valid[y*width+x] and valid[y*width+x+1]]
+        if not pairs or max(pairs)>3:raise AssertionError(f'Directional sweep must not clip at a sample boundary: largest step={max(pairs) if pairs else None}')
+    if args.volumetric_test:
+        values=[pixels[i*4] for i,v in enumerate(valid) if v]
+        if max(values)>50:raise AssertionError(f'Clear outdoor air must not wash the scene white: encoded peak={max(values)}')
     args.output.parent.mkdir(parents=True,exist_ok=True)
     Image.frombytes('RGBA',(width,height),bytes(pixels)).transpose(Image.Transpose.FLIP_TOP_BOTTOM).save(args.output)
     print(json.dumps(dict(distance=args.distance,slope=args.slope,divisor=args.divisor,reflectivePixels=sum(valid),missing=missing,mirrorLeaks=leaks,foregroundPixels=sum(foregrounds),foregroundLeaks=foreground_leaks,sceneChanged=scene_changed,reflectionBlueRange=blue_range)))

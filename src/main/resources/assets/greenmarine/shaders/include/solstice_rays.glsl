@@ -25,26 +25,26 @@ bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec
     float surfaceClass=floor(material.a+.0001);
     bool needReflection=marineNeedsSurfaceReflection(surfaceClass);
     float radius=marineQualityReflectionRadius(fract(material.a)*2.0,surfaceClass,Context.y);
-    int start=radius>1.001?-1:0,end=radius>1.001?3:2;
+    float lightingRadius=Context.y>=2.5?2.0:(Context.y>=1.5?1.5:1.0);
+    float gatherRadius=needLighting?max(radius,lightingRadius):radius;
+    int start=gatherRadius>1.001?-1:0,end=gatherRadius>1.001?3:2;
     for(int y=start;y<end;y++) for(int x=start;x<end;x++) {
         float weight=marineReflectionTapWeight(float(x)-fraction.x,radius)*marineReflectionTapWeight(float(y)-fraction.y,radius);
-        if(weight<=.00001) continue;
-        float lightWeight=marineReflectionTapWeight(float(x)-fraction.x,1.0)*marineReflectionTapWeight(float(y)-fraction.y,1.0);
+        float lightWeight=marineReflectionTapWeight(float(x)-fraction.x,lightingRadius)*marineReflectionTapWeight(float(y)-fraction.y,lightingRadius);
+        if(weight<=.00001 && (!needLighting || lightWeight<=.00001)) continue;
         footprint+=weight;lightingFootprint+=lightWeight;
         ivec2 texel=clamp(first+ivec2(x,y),ivec2(0),outputSize-1);
         ivec2 captured=ivec2(marineCaptureCoordinate(texel.x,outputSize.x,captureSize.x),
             marineCaptureCoordinate(texel.y,outputSize.y,captureSize.y));
         vec4 source=texelFetch(MarineSurfaceNormalDepth,captured,0);
         if(source.w<=1e-6 || dot(source.xyz,surface.xyz)<.95) continue;
-        vec4 sourceMaterial=texelFetch(MarineSurfaceAlbedo,captured,0);
-        if(floor(sourceMaterial.a+.0001)!=floor(material.a+.0001)
-            || abs(sourceMaterial.a-material.a)>.08) continue;
         vec2 sourceUV=(vec2(captured)+.5)/vec2(captureSize);
         vec3 sourcePosition=marineRelativeWorldPosition(sourceUV,source.w);
         vec3 delta=sourcePosition-position;
         if(!marineReflectionFootprintMatches(dot(delta,surface.xyz),length(delta),eyeDistance,float(min(captureSize.x,captureSize.y)),incidence)) continue;
         if(needLighting) {
-            // Roughness broadens reflections only; preserve the original lighting footprint.
+            // Lighting follows geometry, not albedo/material class. Coplanar grass,
+            // stone and PBR texels must not punch holes into the shadow reconstruction.
             if(lightWeight>0.0) {
                 lighting+=texelFetch(RaySurfaceLighting,texel,0)*lightWeight;
                 occlusionSum+=marineSurfaceOcclusion(texelFetch(RaySurfaceExtra,texel,0))*lightWeight;
@@ -52,16 +52,24 @@ bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec
             lightingTotal+=lightWeight;
         }
         if(needReflection) {
+            vec4 sourceMaterial=texelFetch(MarineSurfaceAlbedo,captured,0);
+            if(floor(sourceMaterial.a+.0001)!=floor(material.a+.0001)
+                || abs(sourceMaterial.a-material.a)>.08) continue;
             vec4 hit=texelFetch(RayReflection,texel,0);
             reflectedSum+=vec4(hit.rgb*hit.a,hit.a)*weight;
         }
         total+=weight;
     }
-    if(total<.00001 || (needLighting && lightingTotal<.00001)) return false;
+    if((!needLighting && total<.00001) || (needLighting && lightingTotal<.00001)) return false;
     if(needLighting) {lighting/=lightingTotal;occlusion=occlusionSum/lightingTotal;}
-    support=marineSampleCoverage(total,footprint);
-    if(needLighting) support=min(support,marineSampleCoverage(lightingTotal,lightingFootprint));
-    reflection=vec4(reflectedSum.a>.00001?reflectedSum.rgb/reflectedSum.a:vec3(0),reflectedSum.a/total);
+    // Rejected taps from another face are not missing shadow visibility. Renormalize
+    // valid lighting on this plane; fading to an unshadowed lightmap drew bright seams.
+    support=needLighting?1.0:marineSampleCoverage(total,footprint);
+    // Keep reflection confidence independent of the wider lighting footprint. The
+    // caller multiplies reflection alpha by support when composing native coverage.
+    float reflectionCoverage=marineSampleCoverage(total,footprint);
+    reflection=vec4(reflectedSum.a>.00001?reflectedSum.rgb/reflectedSum.a:vec3(0),
+        total>.00001 && support>.00001?reflectedSum.a/total*reflectionCoverage/support:0.0);
     return true;
 }
 bool solSurfaceRays(vec2 uv,vec4 surface,vec4 material,bool needLighting,out vec4 lighting,out vec4 reflection,out float support) {

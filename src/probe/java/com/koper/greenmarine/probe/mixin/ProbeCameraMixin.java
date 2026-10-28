@@ -10,6 +10,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class ProbeCameraMixin {
     @Inject(method="renderLevel", at=@At("HEAD"))
     private void greenmarine$camera(CallbackInfo ci) {
+        if(Boolean.getBoolean("greenmarine.probe.grass_motion")) {com.koper.greenmarine.probe.GrassMotionProbe.camera((GameRenderer)(Object)this);return;}
         if(Boolean.getBoolean("greenmarine.probe.performance")) {
             var state=((GameRenderer)(Object)this).gameRenderState();
             state.levelRenderState.skyRenderState.sunAngle=0;state.levelRenderState.skyRenderState.rainBrightness=1;
@@ -38,5 +39,11 @@ public abstract class ProbeCameraMixin {
         entity.bob=(HardwareRtProbe.bobbing || com.koper.greenmarine.probe.WorldProgramsProbe.bobbing) ? .25f : 0;
         entity.backwardsInterpolatedWalkDistance=.35f;
         state.optionsRenderState.bobView=true;
+    }
+
+    @ModifyArg(method="renderLevel",at=@At(value="INVOKE",target="Lnet/minecraft/client/renderer/ProjectionMatrixBuffer;getBuffer(Lorg/joml/Matrix4f;)Lcom/mojang/renderpearl/api/buffers/GpuBufferSlice;"),index=0)
+    private org.joml.Matrix4f greenmarine$grassProjection(org.joml.Matrix4f projection) {
+        if(Boolean.getBoolean("greenmarine.probe.grass_motion"))com.koper.greenmarine.probe.GrassMotionProbe.projection((GameRenderer)(Object)this,projection);
+        return projection;
     }
 }

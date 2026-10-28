@@ -13,7 +13,7 @@ layout(std430,set=0,binding=7) readonly buffer SurfaceActors {
 };
 layout(set=0,binding=8) uniform sampler2D ActorSkin;
 struct ActorHit { bool found; float distance; vec3 normal; vec3 albedo; };
-ActorHit traceActors(vec3 origin,vec3 direction,float reach) {
+ActorHit marineTraceActors(vec3 origin,vec3 direction,float reach,bool shadowOnly) {
     ActorHit closest;closest.found=false;closest.distance=reach;
     closest.normal=vec3(0);closest.albedo=vec3(0);
     for(int actor=0;actor<clamp(int(ActorInfo.x),0,64);actor++) {
@@ -47,6 +47,7 @@ ActorHit traceActors(vec3 origin,vec3 direction,float reach) {
             vec2 uv=vec2(dot(box.u[face],localHit),dot(box.v[face],localHit));
             vec4 skin=textureLod(ActorSkin,uv,0.0);
             if(skin.a<=.1) continue;
+            if(shadowOnly) {closest.found=true;return closest;}
             vec3 localNormal=vec3(0);localNormal[face/2]=(face%2)==1?1.0:-1.0;
             vec3 normal=normalize(transpose(mat3(box.inverseModel))*localNormal);
             if(dot(normal,direction)>0)normal=-normal;
@@ -56,9 +57,11 @@ ActorHit traceActors(vec3 origin,vec3 direction,float reach) {
     }
     return closest;
 }
+ActorHit traceActors(vec3 origin,vec3 direction,float reach) {return marineTraceActors(origin,direction,reach,false);}
+bool actorOccluded(vec3 origin,vec3 direction,float reach) {return marineTraceActors(origin,direction,reach,true).found;}
 // Local player sun occlusion. Captured boxes include first-person bodies, so the
 // same payload casts the player's shadow in every camera mode.
 float actorSunVisibility(vec3 origin,vec3 sun) {
     if(ActorInfo.x<.5) return 1.0;
-    return traceActors(origin,sun,24.0).found?0.0:1.0;
+    return actorOccluded(origin,sun,24.0)?0.0:1.0;
 }

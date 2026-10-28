@@ -19,6 +19,7 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--origin-x', type=float, default=0)
     parser.add_argument('--quality', choices=('low','medium','high','ultra'), default='ultra')
+    parser.add_argument('--night', action='store_true', help='Capture the night sky and star appearance')
     parser.add_argument('--source', type=Path, help='Alternate Solstice common source for controlled before/after comparisons')
     parser.add_argument('--iterations', type=int, default=0, help='Optional timed draws after five warmup draws')
     args = parser.parse_args()
@@ -112,6 +113,7 @@ def main():
     surface_data = [0.0] * 32
     surface_data[4] = args.origin_x
     surface_data[8:12] = [.3, .8, .519615, 1]
+    if args.night:surface_data[8:12]=[0,-1,0,0]
     surface_data[12:16] = [.25, .45, .7, 1]
     environment = [0.0] * 32
     environment[:4] = [68, 0, 0, 0]

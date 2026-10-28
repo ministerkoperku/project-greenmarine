@@ -13,6 +13,33 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PlayerReflectionGeometryTest {
+    @Test void wholeModelAppendIsAtomicAfterAPrecedingValidCube() {
+        var builder=new PlayerReflectionGeometry.Builder(64);
+        assertTrue(builder.add(cube(0,false),new Matrix4f().translation(1,2,3)));
+        byte[] before=new byte[builder.data().remaining()];builder.data().get(before);
+        var broken=cube(0,false);broken.polygons[4]=null;
+        var root=new ModelPart(java.util.List.of(cube(0,false),broken),java.util.Map.of());
+        assertFalse(PlayerReflectionGeometry.appendWhole(builder,root,new PoseStack()));
+        assertEquals(1,builder.count());
+        byte[] after=new byte[builder.data().remaining()];builder.data().get(after);assertArrayEquals(before,after);
+        var valid=new ModelPart(java.util.List.of(cube(0,false)),java.util.Map.of());
+        assertTrue(PlayerReflectionGeometry.appendWhole(builder,valid,new PoseStack()));assertEquals(2,builder.count());
+        for(int i=16;i<16+PlayerReflectionGeometry.BOX_BYTES;i++)assertEquals(before[i],builder.data().get(i));
+    }
+    @Test void wholeModelAppendDoesNotPartiallyFillTheLastRemainingSlot() {
+        var builder=new PlayerReflectionGeometry.Builder(16);
+        for(int i=0;i<15;i++)assertTrue(builder.add(cube(0,false),new Matrix4f()));
+        var root=new ModelPart(java.util.List.of(cube(0,false),cube(0,false)),java.util.Map.of());
+        assertFalse(PlayerReflectionGeometry.appendWhole(builder,root,new PoseStack()));assertEquals(15,builder.count());
+    }
+    @Test void wholeModelAppendRestoresPayloadWhenALaterCubeThrows() {
+        var builder=new PlayerReflectionGeometry.Builder(64);assertTrue(builder.add(cube(0,false),new Matrix4f()));
+        byte[] before=new byte[builder.data().remaining()];builder.data().get(before);
+        var cubes=new java.util.ArrayList<ModelPart.Cube>();cubes.add(cube(0,false));cubes.add(null);
+        var root=new ModelPart(cubes,java.util.Map.of());
+        assertThrows(NullPointerException.class,()->PlayerReflectionGeometry.appendWhole(builder,root,new PoseStack()));
+        byte[] after=new byte[builder.data().remaining()];builder.data().get(after);assertArrayEquals(before,after);assertEquals(1,builder.count());
+    }
     private static ModelPart.Cube cube(float deformation,boolean mirror) {
         return new ModelPart.Cube(0,0,-4,-8,-4,8,8,8,deformation,deformation,deformation,mirror,64,64,EnumSet.allOf(Direction.class));
     }

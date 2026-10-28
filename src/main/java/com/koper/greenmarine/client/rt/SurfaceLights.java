@@ -4,14 +4,16 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.state.BlockState;
 import java.util.ArrayList;
 import java.util.List;
 
 /** Light sources near the camera for traced block-light shadows: emitting blocks (rescanned every
- * second, skipping chunk sections without emitters) and dynamic lights from held items and burning entities. */
+ * second, skipping chunk sections without emitters) and dynamic lights from held/dropped items and burning entities. */
 final class SurfaceLights {
     record Source(double x,double y,double z,int level,float red,float green,float blue) {}
     // Pixels within 24 blocks get traced light; a level-15 source reaches 15 further.
@@ -34,18 +36,25 @@ final class SurfaceLights {
         }
         var sources=new ArrayList<>(STATIC);
         for(var entity:level.entitiesForRendering()) {
-            if(!(entity instanceof LivingEntity living) || entity.isRemoved() || entity.position().distanceToSqr(camera)>RADIUS*RADIUS)continue;
-            float partial=client.getDeltaTracker().getGameTimeDeltaPartialTick(false);
-            int main=held(living.getMainHandItem()),off=held(living.getOffhandItem());
+            if(entity.isRemoved() || entity.position().distanceToSqr(camera)>RADIUS*RADIUS)continue;
+            float partial=client.getDeltaTracker().getGameTimeDeltaPartialTick(!level.tickRateManager().isEntityFrozen(entity));
+            var at=entity.getPosition(partial);
+            if(entity.isOnFire()) sources.add(warm(at.x,at.y+entity.getBbHeight()*.5,at.z,15));
+            if(entity instanceof ItemEntity dropped) {
+                var light=itemSource(dropped.getItem(),at.x,at.y+entity.getBbHeight()*.5,at.z);
+                if(light!=null)sources.add(light);
+            }
+            if(!(entity instanceof LivingEntity living))continue;
+            int main=itemEmission(living.getMainHandItem()),off=itemEmission(living.getOffhandItem());
             if(main>0 || off>0) {
                 // In the hand, not the eye: a light at the camera hides every shadow behind its caster.
                 boolean right=(living.getMainArm()==net.minecraft.world.entity.HumanoidArm.RIGHT)==(main>=off);
                 var eye=living.getEyePosition(partial);var look=living.getViewVector(partial);
                 double side=Math.hypot(look.x,look.z)<1e-4?0:1/Math.hypot(look.x,look.z);
                 double rx=-look.z*side*(right?1:-1),rz=look.x*side*(right?1:-1);
-                sources.add(warm(eye.x+look.x*.35+rx*.35,eye.y+look.y*.35-.45,eye.z+look.z*.35+rz*.35,Math.max(main,off)));
+                sources.add(itemSource(main>=off?living.getMainHandItem():living.getOffhandItem(),
+                    eye.x+look.x*.35+rx*.35,eye.y+look.y*.35-.45,eye.z+look.z*.35+rz*.35));
             }
-            if(entity.isOnFire()) {var at=living.position();sources.add(warm(at.x,at.y+living.getBbHeight()*.5,at.z,15));}
         }
         sources.sort(java.util.Comparator.comparingDouble(s->(s.x()-camera.x)*(s.x()-camera.x)+(s.y()-camera.y)*(s.y()-camera.y)+(s.z()-camera.z)*(s.z()-camera.z)));
         int count=Math.min(sources.size(),com.koper.greenmarine.nativebridge.NativeRayTracer.MAX_SURFACE_LIGHTS);
@@ -79,8 +88,18 @@ final class SurfaceLights {
             }
         }
     }
-    private static int held(ItemStack stack) {
-        return !stack.isEmpty() && stack.getItem() instanceof BlockItem block?block.getBlock().defaultBlockState().getLightEmission():0;
+    private static int itemEmission(ItemStack stack) {
+        if(stack.isEmpty())return 0;
+        var item=stack.getItem();
+        if(item==Items.LAVA_BUCKET)return 15;
+        if(item==Items.BLAZE_ROD || item==Items.BLAZE_POWDER)return 10;
+        if(item==Items.GLOWSTONE_DUST || item==Items.GLOW_BERRIES || item==Items.GLOW_INK_SAC || item==Items.MAGMA_CREAM)return 8;
+        if(item instanceof BlockItem block)return block.getBlock().defaultBlockState().getLightEmission();
+        return 0;
+    }
+    static Source itemSource(ItemStack stack,double x,double y,double z) {
+        int light=itemEmission(stack);if(light<=0)return null;
+        return stack.getItem() instanceof BlockItem block?colour(block.getBlock().defaultBlockState(),x,y,z,light):warm(x,y,z,light);
     }
     private static Source colour(BlockState state,double x,double y,double z,int light) {
         String id=net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();

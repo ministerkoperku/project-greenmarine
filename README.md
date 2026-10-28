@@ -79,6 +79,12 @@ cd engine && cargo test && cargo build --release
 Needs Java 25, Rust and `glslangValidator`. Android builds and GPU tests:
 [development](docs/DEVELOPMENT.md).
 
+## AI notice
+
+GreenMarine uses AI-assisted development, including code and shader generation,
+debugging, tests, and documentation. Development is directed by the project owner;
+test results and runtime verification are recorded in `development/`.
+
 ## Community
 
 Questions, bug reports, screenshots and news about new versions go on the [Discord server](https://discord.gg/AMFGEJ7JAG).

@@ -53,7 +53,7 @@ final class DistantTerrain implements AutoCloseable {
         GpuTextureView depth;float[] clip;
         try {
             if(!bridge.renderingEnabled()) {override(false);return;}
-            depth=bridge.depth();clip=bridge.clip();
+            var input=bridge.input(main.width,main.height);depth=input.depth();clip=input.clip();
         }
         catch(ReflectiveOperationException|RuntimeException error) {disable(error);return;}
         if(depth==null || depth.getWidth(0)!=main.width || depth.getHeight(0)!=main.height) {
@@ -150,7 +150,7 @@ final class DistantTerrain implements AutoCloseable {
             depthWrapper=proxy.getMethod("getDhDepthTextureBlazeWrapper");depthDirection=proxy.getMethod("getDepthDirection");
             depthRange=proxy.getMethod("getDepthRange");
             payload=Class.forName("com.seibel.distanthorizons.api.objects.DhApiResult").getField("payload");
-            var util=Class.forName("com.seibel.distanthorizons.core.util.RenderUtil");
+            var util=Class.forName("com.seibel.distanthorizons.core.util.RenderUtil",false,DistantTerrain.class.getClassLoader());
             near=util.getMethod("getNearClipPlaneInBlocks");heightNear=util.getMethod("getHeightBasedNearClipOverrideBlockDistance");
             far=util.getMethod("getFarClipPlaneDistanceInBlocks");
             Object graphics=Class.forName("com.seibel.distanthorizons.api.interfaces.config.IDhApiConfig").getMethod("graphics").invoke(configs);
@@ -174,6 +174,14 @@ final class DistantTerrain implements AutoCloseable {
             if(wrapper==null)return null;
             if(textureView==null)textureView=wrapper.getClass().getMethod("getTextureView");
             return (GpuTextureView)textureView.invoke(wrapper);
+        }
+        private record Input(GpuTextureView depth,float[] clip) {}
+        Input input(int width,int height) throws ReflectiveOperationException {
+            var depth=depth();
+            // RenderUtil freezes DH's renderer definition in its static initializer.
+            // Neither metadata discovery nor a not-ready depth frame may trigger it.
+            boolean ready=depth!=null && depth.getWidth(0)==width && depth.getHeight(0)==height;
+            return new Input(depth,ready?clip():null);
         }
         /** m22, m23, depth range, direction: view distance = m23/(ndc+m22). */
         float[] clip() throws ReflectiveOperationException {

@@ -4,6 +4,16 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RayEnvironmentTest {
+    @Test void moonShadowLightDoesNotScheduleInvisibleSunShafts() {
+        for(var quality:com.koper.greenmarine.api.pack.Quality.values()) {
+            assertEquals(0,RaySun.volumetricSteps(quality,(float)Math.PI,1,true,1));
+            assertEquals(0,RaySun.volumetricSteps(quality,0,1,false,1));
+            assertEquals(0,RaySun.volumetricSteps(quality,0,1,true,0));
+            assertTrue(RaySun.volumetricSteps(quality,0,1,true,1)>0);
+        }
+        assertTrue(RaySun.volumetricSteps(com.koper.greenmarine.api.pack.Quality.ULTRA,0,1,true,1)
+            >RaySun.volumetricSteps(com.koper.greenmarine.api.pack.Quality.HIGH,0,1,true,1));
+    }
     @org.junit.jupiter.api.Test void ambientTracksNightAndWeather() {
         assertEquals(.45f,RaySun.ambient(0,1,true),.00001f);
         assertTrue(RaySun.ambient((float)Math.PI,1,true)<.06f);

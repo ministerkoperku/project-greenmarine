@@ -232,6 +232,8 @@ public final class WorldPrograms {
     public static boolean surfaceReady() {return surfaceReady;}
     public static boolean surfaceCaptureUnavailable() {return captureUnsupported;}
     public static GpuTextureView surfaceNormalDepth() {return surfaceReady?MATERIALS.normal():null;}
+    /** Lazy binding for pack scene passes that sample columns outside the traced scene. */
+    public static GpuTextureView heightField(CommandEncoder encoder) {if(heightField==null)heightField=HEIGHTS.bind(encoder);return heightField;}
     public static GpuTextureView surfaceAlbedo() {return surfaceReady?MATERIALS.albedo():null;}
     public static void captureMaterials(RenderTarget main,GpuBufferSlice fog,ChunkSectionsToRender chunks,GpuSampler sampler,boolean wireframe) {
         if(earlyMaterials)return;

@@ -37,7 +37,7 @@ class ReflectionPolicyTest(unittest.TestCase):
             if(marineQualityReflectionRadius(.9f,2.0f,2.0f)<=1.0f) return 20;
             if(marineNeedsSurfaceReflection(1.0f) || marineNeedsSurfaceReflection(7.0f)) return 21;
             if(!marineNeedsSurfaceReflection(4.0f) || !marineNeedsSurfaceReflection(6.0f)) return 22;
-            for(int capture=1;capture<130;++capture)for(int divisor: {2,4}) {
+            for(int capture=1;capture<130;++capture)for(int divisor: {2,3,4}) {
                 int output=(capture-1)/divisor+1;
                 for(int texel=0;texel<output;++texel) {
                     int expected=int(((long long)(texel*2+1)*capture)/(output*2));
@@ -49,7 +49,7 @@ class ReflectionPolicyTest(unittest.TestCase):
             if(marineReflectionFootprintMatches(.005f,.3f,.1f,1000.0f,1.0f))return 26;
             if(marineTranslucentSurfaceVisible(.6f,.5f))return 27;
             if(!marineTranslucentSurfaceVisible(.3f,.5f) || !marineTranslucentSurfaceVisible(0.0f,.5f))return 28;
-            for(int capture=2;capture<130;++capture)for(int divisor: {2,4}) {
+            for(int capture=2;capture<130;++capture)for(int divisor: {2,3,4}) {
                 int output=(capture-1)/divisor+1;
                 if(output<2)continue;
                 for(int sample=0;sample<50;++sample) {

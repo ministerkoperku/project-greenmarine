@@ -258,6 +258,7 @@ public final class PackRenderer {
         var environment=voxels==null?null:com.koper.greenmarine.client.world.WorldPrograms.environmentBindings(encoder);
         var surfaceFrame=voxels==null?null:com.koper.greenmarine.client.world.WorldPrograms.surfaceBindings(encoder);
         var surfaceRayData=voxels==null?null:com.koper.greenmarine.client.rt.RayWorld.surfaceBindings(encoder);
+        var heightField=voxels==null?null:com.koper.greenmarine.client.world.WorldPrograms.heightField(encoder);
         var historyData=history==null?null:historyUniform(encoder,history,historyCamera);
         try (var pass = encoder.createRenderPass(() -> "GreenMarine shaderpack",output,Optional.empty())) {
             pass.setPipeline(compiled); pass.setUniform("MarineFrame",uniform);
@@ -282,6 +283,7 @@ public final class PackRenderer {
                 pass.setUniform("RayAlbedo",com.koper.greenmarine.client.rt.RayWorld.albedo(),RenderSystem.getSamplerCache().getClampToEdge(FilterMode.LINEAR));
                 pass.setUniform("VoxelFrame",voxels);
                 pass.setUniform("VoxelMaterials",materials,RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
+                pass.setUniform("MarineHeightField",heightField,RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
             }
             if(history!=null) {
                 pass.setUniform("MarineHistoryFrame",historyData);
@@ -329,7 +331,8 @@ public final class PackRenderer {
                 .withUniform("MarineSurfaceFrame",UniformType.UNIFORM_BUFFER)
                 .withUniform("MarineSurfaceNormalDepth",UniformType.COMBINED_IMAGE_SAMPLER).withUniform("MarineSurfaceAlbedo",UniformType.COMBINED_IMAGE_SAMPLER)
                 .withUniform("RaySurfaceFrame",UniformType.UNIFORM_BUFFER).withUniform("RaySurfaceLighting",UniformType.COMBINED_IMAGE_SAMPLER)
-                .withUniform("RayReflection",UniformType.COMBINED_IMAGE_SAMPLER).withUniform("RaySurfaceExtra",UniformType.COMBINED_IMAGE_SAMPLER);
+                .withUniform("RayReflection",UniformType.COMBINED_IMAGE_SAMPLER).withUniform("RaySurfaceExtra",UniformType.COMBINED_IMAGE_SAMPLER)
+                .withUniform("MarineHeightField",UniformType.COMBINED_IMAGE_SAMPLER);
         if(history) layout.withUniform("MarineHistoryFrame",UniformType.UNIFORM_BUFFER)
             .withUniform("HistorySampler",UniformType.COMBINED_IMAGE_SAMPLER).withUniform("HistoryNormalDepth",UniformType.COMBINED_IMAGE_SAMPLER);
         if(lightingHistory) layout.withUniform("HistoryAlbedoMaterial",UniformType.COMBINED_IMAGE_SAMPLER)

@@ -3,6 +3,17 @@ import org.junit.jupiter.api.Test;
 import java.nio.*;
 import static org.junit.jupiter.api.Assertions.*;
 class TriangleSceneTest {
+    @Test void filteredCutoutFlagIsSeparateFromLegacyTranslucentAlpha() {
+        var builder=new TriangleScene.Builder(0,0,0,3);
+        float[] positions={0,0,0,1,0,0,0,1,0};float[] uv={0,0,1,0,0,1};
+        builder.triangle(positions,uv,0xffffff,0,true,.5f);
+        builder.triangle(positions,uv,0xffffff,0,true,0,true);
+        builder.triangle(positions,uv,0xffffff,0,false,0,true);
+        var data=builder.finish().data();
+        assertEquals(1,data.getFloat(72));assertEquals(.5f,data.getFloat(92));
+        assertEquals(1.25f,data.getFloat(96+72));
+        assertEquals(0,data.getFloat(192+72));
+    }
     @Test void sunlightTransmissionUsesReservedFloatAndSurvivesAssembly() {
         var builder=new TriangleScene.Builder(0,0,0,1);
         builder.triangle(new float[]{0,0,0,1,0,0,0,1,0},new float[6],0xFFFFFF,0,true,.96f);

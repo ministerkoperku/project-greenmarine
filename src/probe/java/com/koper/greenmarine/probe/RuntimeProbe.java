@@ -106,6 +106,9 @@ public final class RuntimeProbe implements ClientModInitializer {
         if (screen != null && (name.equals("PauseScreen") || name.equals("DemoIntroScreen") || (client.isDemo() && name.equals("PopupScreen")))) {
             client.gui.setScreen(null);
         }
+        if(Boolean.getBoolean("greenmarine.probe.daylight")) { DaylightProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.cave")) { CaveProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.grass_motion")) { GrassMotionProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.look")) { LookProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.dynamic_rays")) { DynamicRaySceneProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.performance")) { TerrainPerformanceProbe.tick(client,OUTPUT); return; }

@@ -156,6 +156,37 @@ float solPuddle(vec3 p,vec3 n,float skylight) {
     return smoothstep(.74-.28*wetness,.8-.22*wetness,puddleNoise)*smoothstep(.72,.99,n.y)*smoothstep(.65,.98,skylight)
         *smoothstep(.05,.35,wetness)*marineParameter(SOL_PUDDLES);
 }
+// Sparse angular points with a compact, pixel-filtered kernel. Neighboring cells
+// and cube faces contribute across their boundaries, avoiding clipped drops/flicker.
+vec3 solStarFace(vec3 d,vec3 forward,vec3 right,vec3 up,float face,float radius,float energy) {
+    float facing=dot(d,forward),major=max(abs(d.x),max(abs(d.y),abs(d.z)));
+    if(facing<=0.0 || facing<major-6.0*radius)return vec3(0);
+    vec2 grid=vec2(dot(d,right),dot(d,up))/facing*180.0;
+    vec2 base=floor(grid);vec3 colour=vec3(0);
+    for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++) {
+        vec2 cell=base+vec2(x,y);
+        if(any(lessThan(cell,vec2(-180))) || any(greaterThanEqual(cell,vec2(180))))continue;
+        vec2 seed=cell+vec2(face*37.17,face*91.31);
+        if(solHash(seed)<.998)continue;
+        vec2 centre=cell+.35+.3*vec2(solHash(seed+vec2(17,53)),solHash(seed+vec2(71,29)));
+        vec3 starDirection=normalize(forward+(right*centre.x+up*centre.y)/180.0);
+        float angle=length(cross(d,starDirection));
+        float kernel=exp(-angle*angle/(2.0*radius*radius))*(1.0-smoothstep(2.0*radius,3.0*radius,angle));
+        colour+=mix(vec3(.68,.8,1.0),vec3(1.0,.86,.7),solHash(seed+vec2(47,13)))*kernel*energy;
+    }
+    return colour;
+}
+vec3 solStars(vec3 d) {
+    float pixel=max(abs(InverseProjection[0][0])/max(Frame.x,1.0),abs(InverseProjection[1][1])/max(Frame.y,1.0))*2.0;
+    float core=.00035,radius=clamp(pixel*.3,core,.0008);
+    float energy=min(1.0,core*core/max(pixel*pixel*.15,1e-10))*2.5;
+    return solStarFace(d,vec3(1,0,0),vec3(0,0,1),vec3(0,1,0),0.0,radius,energy)
+        +solStarFace(d,vec3(-1,0,0),vec3(0,0,1),vec3(0,1,0),1.0,radius,energy)
+        +solStarFace(d,vec3(0,1,0),vec3(1,0,0),vec3(0,0,1),2.0,radius,energy)
+        +solStarFace(d,vec3(0,-1,0),vec3(1,0,0),vec3(0,0,1),3.0,radius,energy)
+        +solStarFace(d,vec3(0,0,1),vec3(1,0,0),vec3(0,1,0),4.0,radius,energy)
+        +solStarFace(d,vec3(0,0,-1),vec3(1,0,0),vec3(0,1,0),5.0,radius,energy);
+}
 vec3 solSky(vec3 direction,bool clouds) {
     vec3 d=normalize(direction);float day=solDay(),up=max(d.y,0.0);
     vec3 night=mix(vec3(.006,.009,.020),vec3(.0015,.003,.010),pow(up,.48))*marineParameter(SOL_NIGHT);
@@ -170,9 +201,7 @@ vec3 solSky(vec3 direction,bool clouds) {
     float moonDot=dot(d,Moon.xyz),phase=(cos(Celestial.x*6.28318530718/8.0)+1.0)*.5;
     float moonDisc=smoothstep(.99972,.9999,moonDot);
     color+=vec3(.49,.63,.86)*moonDisc*Moon.w*phase*1.8;
-    vec2 stars=d.xz/(abs(d.y)+.22)*230.0;
-    float star=step(.998,solHash(floor(stars)))*pow(max(0.0,1.0-length(fract(stars)-.5)*2.0),5.0);
-    color+=vec3(.62,.72,1)*star*(1.0-day)*smoothstep(0.0,.3,d.y)*(1.0-Environment.y)*marineParameter(SOL_NIGHT);
+    if(day<.999 && d.y>0.0)color+=solStars(d)*(1.0-day)*smoothstep(0.0,.3,d.y)*(1.0-Environment.y)*marineParameter(SOL_NIGHT);
     if(clouds && d.y>.015 && Dimension.w>.5) {
         float altitude=Environment.x;
         vec2 wind=vec2(EnvironmentTime.x*.018,EnvironmentTime.x*.007)*marineParameter(SOL_WIND);

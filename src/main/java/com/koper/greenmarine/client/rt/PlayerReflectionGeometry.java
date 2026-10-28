@@ -30,6 +30,11 @@ final class PlayerReflectionGeometry {
         int count() {return count;}
         int remaining() {return capacity-count;}
         ByteBuffer data() {return buffer.asReadOnlyBuffer().order(ByteOrder.nativeOrder());}
+        private void rollback(int prior) {
+            // Clear the whole unused tail, including a box whose serialization threw.
+            for(int offset=16+prior*BOX_BYTES;offset<buffer.capacity();offset+=8)buffer.putLong(offset,0);
+            count=prior;buffer.putFloat(0,count);
+        }
         boolean add(ModelPart.Cube cube,Matrix4fc pose) {
             if(count==capacity || cube.polygons.length!=6 || !pose.isFinite()
                 || pose.m03()!=0 || pose.m13()!=0 || pose.m23()!=0 || pose.m33()!=1) return false;
@@ -106,10 +111,11 @@ final class PlayerReflectionGeometry {
         var cubes=new java.util.ArrayList<ModelPart.Cube>();var poses=new java.util.ArrayList<Matrix4f>();
         root.visit(pose,(partPose,path,index,cube)->{if(visible(root,path)){cubes.add(cube);poses.add(new Matrix4f(partPose.pose()));}});
         if(cubes.isEmpty() || cubes.size()>builder.remaining())return false;
-        var trial=new Builder(builder.data(),builder.count(),builder.capacity);
-        for(int i=0;i<cubes.size();i++) if(!trial.add(cubes.get(i),poses.get(i)))return false;
-        for(int i=0;i<cubes.size();i++)builder.add(cubes.get(i),poses.get(i));
-        return true;
+        int prior=builder.count();boolean committed=false;
+        try {
+            for(int i=0;i<cubes.size();i++)if(!builder.add(cubes.get(i),poses.get(i)))return false;
+            committed=true;return true;
+        } finally {if(!committed)builder.rollback(prior);}
     }
     static Builder capture(ModelPart root,PoseStack pose) {
         var builder=new Builder();

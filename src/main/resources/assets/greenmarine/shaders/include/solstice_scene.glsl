@@ -3,6 +3,8 @@
 #include <greenmarine:solstice.glsl>
 #include <greenmarine:surface_rays.glsl>
 #include <greenmarine:surface_extra.glsl>
+#include <greenmarine:rays.glsl>
+#include <greenmarine:heightfield.glsl>
 uniform sampler2D SceneSampler;
 uniform sampler2D DepthSampler;
 vec3 solHeightFog(vec3 color,vec3 position) {
@@ -26,29 +28,45 @@ vec3 solHeightFog(vec3 color,vec3 position) {
     if(Dimension.y>.5 || Dimension.z>.5) haze=solLinear(EnvironmentFogColor.rgb);
     return mix(color,haze,clamp(fog,0.0,.96));
 }
+float solMedian9(float values[9]) {
+    for(int i=1;i<9;i++) {
+        float value=values[i];int j=i-1;
+        for(;j>=0 && values[j]>value;j--) values[j+1]=values[j];
+        values[j+1]=value;
+    }
+    return values[4];
+}
 // Ray-traced sun shafts: the native pass marches each reduced camera ray with shadow
-// rays; a tent filter over the reduced texels hides the per-pixel step jitter.
-vec3 solVolumetric(vec2 uv,vec3 direction,float distance,bool sky) {
+// rays; a median filter rejects isolated fireflies and a tent filter hides step jitter.
+vec3 solVolumetric(vec2 uv,vec3 direction,float distance,bool sky,float columns) {
     if(!marineSurfaceRayReady() || marineParameter(SOL_VOLUMETRIC)<=0.0 || SurfaceSun.w<=0.0
         || Dimension.x<.5 || Environment.w>.5) return vec3(0);
     vec2 texel=1.0/vec2(textureSize(RaySurfaceExtra,0));
     vec4 extra=vec4(0);float total=0.0;
+    float values[9];bool valid[9];int slot=0;
     for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++) {
         vec4 sampled=texture(RaySurfaceExtra,uv+vec2(x,y)*texel);
-        float weight=float((2-abs(x))*(2-abs(y)))*step(.001,sampled.z);
+        bool marched=sampled.z>.001;
+        float weight=float((2-abs(x))*(2-abs(y)))*float(marched);
         extra+=sampled*weight;total+=weight;
+        values[slot]=sampled.y;valid[slot++]=marched;
     }
     if(total<=0.0) return vec3(0);
     extra/=total;
+    for(int i=0;i<9;i++) if(!valid[i]) values[i]=extra.y;
+    extra.y=mix(extra.y,solMedian9(values),.7);
     float reach=min(extra.z,distance);
     float cosine=dot(direction,SurfaceSun.xyz),g=.72;
     float forward=(1.0-g*g)/(12.5663706*pow(1.0+g*g-2.0*g*cosine,1.5));
     float phase=mix(.0795775,forward,.7);
-    // Indoors (no sky light at the camera) the air is dense enough for window beams to read.
+    // Open air uses a low extinction scale, consistent with height fog. The old
+    // indoor-scale density outdoors painted a white layer over sunlit terrain.
     float indoor=clamp(extra.w-1.0,0.0,1.0);
-    float density=.009*marineParameter(SOL_VOLUMETRIC)*(1.0+Environment.y*2.0)*(1.0+indoor*6.0);
-    // The sky already carries the sun glow; shafts in front of terrain carry the contrast.
-    return solSunColor()*SurfaceSun.w*extra.y*(1.0-exp(-reach*density))*phase*(sky?2.0:5.0*(1.0+indoor));
+    float density=mix(.001,.063,indoor)*marineParameter(SOL_VOLUMETRIC)*(1.0+Environment.y*2.0);
+    // Scattering depends on the air path, not whether its endpoint is sky or a
+    // cutout leaf. Different endpoint gains drew flat bright foliage silhouettes.
+    // Preserve the existing dense indoor terrain-beam response at indoor=1.
+    return solSunColor()*SurfaceSun.w*extra.y*columns*(1.0-exp(-reach*density))*phase*mix(1.0,10.0,indoor);
 }
 vec3 solScene(vec2 uv) {
     vec3 color=solLinear(texture(SceneSampler,uv).rgb);
@@ -87,7 +105,20 @@ vec3 solScene(vec2 uv) {
         distance=length(position-SurfaceEye.xyz);
         direction=(position-SurfaceEye.xyz)/max(distance,.0001);
     }
-    color+=solVolumetric(uv,direction,distance,sceneDepth<=1e-6);
+    // Shadow rays that leave the finite traced scene cannot see terrain beyond it.
+    // Test the height field where the sun ray exits the scene, which keeps cave-mouth
+    // beams while rejecting rays that escape into a mountain or tunnel wall.
+    float columns=1.0;
+    if(sceneDepth>1e-6 && SurfaceSun.w>0.0) {
+        vec3 sun=normalize(SurfaceSun.xyz);
+        if(sun.y>.03) {
+            vec3 inverse=1.0/max(abs(sun),vec3(1e-4))*sign(sun+vec3(1e-6));
+            vec3 exits=max((RayBoundsMin.xyz-position)*inverse,(RayBoundsMax.xyz-position)*inverse);
+            float leave=max(min(exits.x,min(exits.y,exits.z)),1.0);
+            columns=marineHeightFieldSun(position,sun,leave);
+        }
+    }
+    color+=solVolumetric(uv,direction,distance,sceneDepth<=1e-6,columns);
     return max(color,vec3(0));
 }
 #endif

@@ -2,6 +2,50 @@
 
 ## 0.9.11-prototype
 
+- Registered block emitters no longer contribute a second emissive image through
+  sparse GI rays. Local-light shadows/colour stay active; unknown and external
+  emitters retain their fallback. Skip albedo sampling for zero-radiance bounces.
+- GI with missing atlas mipmaps: use a bounded, UV-independent four-sample colour
+  estimate when mip4 is unavailable. An atlas forced to mip0 no longer projects
+  detailed emitter textures onto neighbouring wood and stone; reflections retain detail.
+- Render-thread CPU follow-up from a fullpack Spark profile: memoize biome tint per
+  block/tint index and serialize each nearby actor cube once. Rejected or throwing
+  model captures roll back their complete payload without leaving partial actors.
+- Grass shadow stability: remove the GI/AO filter that shifted its window at each
+  native 8x8 workgroup boundary. Primary sun shadows now filter binary cutout alpha
+  over the receiver pixel footprint instead of switching whole reduced pixels on/off.
+  Opaque casters and legacy translucent-material transmission keep their existing
+  behavior; no additional shadow rays or native ABI layout changes.
+- Document AI-assisted development in the root README.
+- Distant Horizons startup: discover RenderUtil without initializing its cached
+  renderer definition, and defer clip queries until a matching DH depth texture
+  exists. Early GreenMarine frames no longer freeze DH's renderer reference to null.
+- Diffuse GI now accesses the averaged atlas mip requested by the bounce shader;
+  the native surface sampler previously clamped every lookup to mip zero, projecting
+  detailed block textures into indirect light. Reflection and alpha lookups retain LOD0.
+- Solstice daylight haze: clear outdoor air no longer uses the dense indoor shaft
+  scale. Scattering at equal path length uses the same response for sky and terrain,
+  removing flat white foliage silhouettes and excessive landscape washout; indoor
+  terrain-beam density/strength are preserved.
+- Solstice corner/performance follow-up: renormalize lighting on each material face
+  without restoring an unshadowed lightmap at the corner. Local shadows terminate
+  on the first blocker and use two area-light taps plus a shadow-only actor path;
+  moonlight no longer schedules invisible sun shafts. High now traces one native
+  pixel per 3x3 viewport region, Ultra per 2x2; external packs retain half resolution.
+  Water has stronger spectral extinction. Stars use angular point kernels gathered
+  across cell/cube boundaries instead of a stretched planar pattern.
+- Solstice lighting follow-up: GI misses no longer add sky light to caves; hemisphere
+  sampling no longer rotates with the screen pixel pattern. Sun shadow solutions
+  blend continuously at zero RT coverage, distant columns exclude leaves, and wider
+  High/Ultra lighting reconstruction crosses coplanar material seams without holes.
+  Local lights use small area emitters and actor occlusion, including thin parts near
+  a source; partially blocked lights cannot suppress a stronger visible candidate.
+  Dropped emissive items and interpolated burning-entity positions supply terrain
+  light. Scene-only packs initialize their shared height-field binding before drawing.
+- Solstice RT: reduced-resolution volumetric sun shafts use 8/12/16/24 steps by quality, a
+  median+tent filter that rejects isolated fireflies, and the height field beyond the traced
+  scene. Shadow rays that escape the finite scene into a mountain or tunnel wall no longer
+  light the air as if they reached the sun, while cave-mouth beams keep working.
 - Compute API: GreenMarine packs declare persistent `resources` (storage images and buffers) and `"stage":"compute"` passes (`.csh`, `groups`: screen / image / fixed) whose shaders bind resources purely by name; scene passes sample pack images through `inputs`. Java: `RenderSession.compute/storageTexture/storageBuffer/dispatch`, graph `storageTexture` + `PassContext.dispatch`, `MarineRenderer.computeCapabilities()`. Vulkan only, reported only after a pipeline is built on the host device; `"requires":"compute"` selects fallbacks elsewhere. See [compute](docs/COMPUTE.md).
 - Raster storage: fragment/vertex programs read and write storage buffers and images (`ShaderProgram.withStorage`, `Material.storageBuffer/storageImage`); pack scene passes bind pack buffers/images by name. Optional `fragmentStoresAndAtomics`, `vertexPipelineStoresAndAtomics` and format-less storage image features are requested and reported only when enabled.
 - Fixed the player losing every shadow while surface RT frames are skipped (busy submission slots during scene rebuilds): the vanilla blob now returns for skipped frames. Logs when the camera nears the edge of a lagging RT scene and when surface RT skips frames, for the shadows-while-moving report.

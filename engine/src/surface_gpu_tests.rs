@@ -152,9 +152,20 @@ struct Image {
     handle: vk::Image,
     view: vk::ImageView,
     memory: vk::DeviceMemory,
+    levels: u32,
 }
 impl Image {
     unsafe fn new(host: &Host, width: u32, height: u32, format: vk::Format, sampled: bool) -> Self {
+        Self::with_mips(host, width, height, format, sampled, 1)
+    }
+    unsafe fn with_mips(
+        host: &Host,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        sampled: bool,
+        levels: u32,
+    ) -> Self {
         let mut usage = vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC;
         if sampled {
             usage |= vk::ImageUsageFlags::SAMPLED;
@@ -170,7 +181,7 @@ impl Image {
                         height,
                         depth: 1,
                     })
-                    .mip_levels(1)
+                    .mip_levels(levels)
                     .array_layers(1)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .tiling(vk::ImageTiling::OPTIMAL)
@@ -206,7 +217,7 @@ impl Image {
                         .image(handle)
                         .view_type(vk::ImageViewType::TYPE_2D)
                         .format(format)
-                        .subresource_range(range()),
+                        .subresource_range(range().level_count(levels)),
                     None,
                 )
                 .unwrap()
@@ -218,6 +229,7 @@ impl Image {
             handle,
             view,
             memory,
+            levels,
         }
     }
     unsafe fn initialize(&self, command: vk::CommandBuffer, color: [f32; 4]) {
@@ -230,7 +242,7 @@ impl Image {
             &[],
             &[vk::ImageMemoryBarrier::default()
                 .image(self.handle)
-                .subresource_range(range())
+                .subresource_range(range().level_count(self.levels))
                 .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::GENERAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -245,7 +257,7 @@ impl Image {
             self.handle,
             vk::ImageLayout::GENERAL,
             &vk::ClearColorValue { float32: color },
-            &[range()],
+            &[range().level_count(self.levels)],
         );
     }
 }
@@ -305,30 +317,30 @@ unsafe fn pixels(buffer: &Buffer, count: usize) -> Vec<[f32; 4]> {
     buffer.device.unmap_memory(buffer.memory);
     result
 }
-unsafe fn readback(
+unsafe fn readback<const N: usize>(
     host: &Host,
     ray: &mut RayState,
     frame: &[f32; 80],
-    outputs: &[Image; 2],
+    outputs: &[Image; N],
     views: [u64; 3],
     width: u32,
     height: u32,
-) -> [Vec<[f32; 4]>; 2] {
+) -> [Vec<[f32; 4]>; N] {
     readback_actors(host, ray, frame, outputs, views, width, height, None)
 }
 #[allow(clippy::too_many_arguments)]
-unsafe fn readback_actors(
+unsafe fn readback_actors<const N: usize>(
     host: &Host,
     ray: &mut RayState,
     frame: &[f32; 80],
-    outputs: &[Image; 2],
+    outputs: &[Image; N],
     views: [u64; 3],
     width: u32,
     height: u32,
     actors: Option<(&[f32], u64)>,
-) -> [Vec<[f32; 4]>; 2] {
+) -> [Vec<[f32; 4]>; N] {
     let count = width as usize * height as usize;
-    let buffers = [
+    let buffers: [Buffer; N] = std::array::from_fn(|_| {
         Buffer::new(
             &host.device,
             &host.memory,
@@ -336,22 +348,22 @@ unsafe fn readback_actors(
             vk::BufferUsageFlags::TRANSFER_DST,
             true,
         )
-        .unwrap(),
-        Buffer::new(
-            &host.device,
-            &host.memory,
-            count as u64 * 8,
-            vk::BufferUsageFlags::TRANSFER_DST,
-            true,
-        )
-        .unwrap(),
-    ];
+        .unwrap()
+    });
     host.begin();
     ray.barrier(host.command);
     for image in outputs {
         image.clear(host.command, [-3.0; 4]);
     }
-    let images = [outputs[0].handle, outputs[1].handle, vk::Image::null()];
+    let images = [
+        outputs[0].handle,
+        outputs[1].handle,
+        if N > 2 {
+            outputs[2].handle
+        } else {
+            vk::Image::null()
+        },
+    ];
     match actors {
         Some((payload, skin)) => ray.record_surface_actors(
             host.command,
@@ -397,7 +409,7 @@ unsafe fn readback_actors(
         &[],
     );
     host.submit();
-    [pixels(&buffers[0], count), pixels(&buffers[1], count)]
+    std::array::from_fn(|i| pixels(&buffers[i], count))
 }
 
 unsafe fn upload_capture(host: &Host, image: &Image, width: u32, height: u32, data: &[[f32; 4]]) {
@@ -457,6 +469,508 @@ fn identity_frame(width: u32, height: u32) -> [f32; 80] {
     frame[75] = 1.0;
     frame[76] = 0.2;
     frame
+}
+
+#[test]
+#[ignore = "Explicit Vulkan local emitter GI duplication regression"]
+fn surface_gpu_registered_emitters_do_not_stamp_their_shape_through_gi() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let normal = Image::new(&host, 1, 1, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let outputs = std::array::from_fn::<_, 2, _>(|_| {
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false)
+        });
+        host.begin();
+        normal.initialize(host.command, [0., 0., -1., 0.5]);
+        albedo.initialize(host.command, [0.4, 0.4, 0.4, 1.4]);
+        atlas.initialize(host.command, [1.; 4]);
+        for image in &outputs {
+            image.initialize(host.command, [0.; 4]);
+        }
+        ray.barrier(host.command);
+        host.submit();
+        // One fixed hemisphere ray intersects a small emitter six blocks away,
+        // projecting its geometric silhouette even when its texture is averaged.
+        ray.scene(&triangle(
+            [[1., -2., -6.], [2., -2., -6.], [1.5, -1., -6.]],
+            14.,
+        ))
+        .unwrap();
+        let views = [
+            atlas.view.as_raw(),
+            normal.view.as_raw(),
+            albedo.view.as_raw(),
+        ];
+        let mut frame = identity_frame(1, 1);
+        frame[75] = 0.;
+        frame[77] = 1.;
+        let unmatched = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!(
+            unmatched[0][0][1] > 0.5,
+            "emitters absent from the local-light table still need the legacy fallback"
+        );
+        ray.set_surface_lights(&[1.5, -1.5, -6.5, 14., 1., 1., 1., 0.], 1)
+            .unwrap();
+        frame[77] = 0.;
+        let direct = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!(
+            direct[0][0][1] > 0.22,
+            "local emitter must still illuminate the receiver"
+        );
+        frame[77] = 1.;
+        let gi = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        for channel in 0..3 {
+            assert!((gi[0][0][channel]-direct[0][0][channel]).abs()<0.002,
+            "a registered direct emitter must not project a second GI image: direct={:?}, GI={:?}",direct[0][0],gi[0][0]);
+        }
+        ray.set_surface_lights(&[1.5, -1.5, -7.5, 14., 1., 1., 1., 0.], 1)
+            .unwrap();
+        let unrelated = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!(
+            unrelated[0][0][1] > gi[0][0][1] + 0.5,
+            "an unrelated local light must not suppress an unrepresented emitter"
+        );
+        println!(
+            "unmatched={:?}; direct={:?}; registered GI={:?}",
+            unmatched[0][0], direct[0][0], gi[0][0]
+        );
+    }
+}
+
+#[test]
+#[ignore = "Explicit Vulkan zero-mip diffuse texture stability"]
+fn surface_gpu_zero_mip_bounces_average_colour_without_projecting_source_uv() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let normal = Image::new(&host, 1, 1, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::new(&host, 4, 4, vk::Format::R32G32B32A32_SFLOAT, true);
+        let outputs = std::array::from_fn::<_, 2, _>(|_| {
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false)
+        });
+        host.begin();
+        normal.initialize(host.command, [0., 0., -1., 0.5]);
+        albedo.initialize(host.command, [0.4, 0.4, 0.4, 4.05]);
+        atlas.initialize(host.command, [0.; 4]);
+        for image in &outputs {
+            image.initialize(host.command, [0.; 4]);
+        }
+        ray.barrier(host.command);
+        host.submit();
+        let colours: Vec<[f32; 4]> = (0..16)
+            .map(|i| {
+                if i % 4 < 2 {
+                    [1., 0., 0., 1.]
+                } else {
+                    [0., 1., 0., 1.]
+                }
+            })
+            .collect();
+        upload_capture(&host, &atlas, 4, 4, &colours);
+        let mut source = triangle(
+            [[-100., -100., -2.], [100., -100., -2.], [0., 100., -2.]],
+            1.,
+        );
+        source[12..18].copy_from_slice(&[0., 0., 1., 0., 0.5, 1.]);
+        source[20..23].fill(1.);
+        ray.scene(&source).unwrap();
+        let views = [
+            atlas.view.as_raw(),
+            normal.view.as_raw(),
+            albedo.view.as_raw(),
+        ];
+        let mut frame = identity_frame(1, 1);
+        frame[75] = 0.;
+        frame[77] = 1.;
+        let mut phases = Vec::new();
+        for offset in [-20., 20.] {
+            frame[64] = offset;
+            let values = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+            phases.push((values[0][0], values[1][0]));
+            assert!(
+                (values[0][0][0] - values[0][0][1]).abs() < 0.002 && values[0][0][0] > 0.25,
+                "zero-mip GI must retain averaged colour instead of source UV detail: {phases:?}"
+            );
+        }
+        assert!(
+            phases[0].1[0] > phases[0].1[1] + 0.1 && phases[1].1[1] > phases[1].1[0] + 0.1,
+            "reflection must retain detailed source UVs: {phases:?}"
+        );
+        println!("zero-mip GI/reflection phases={phases:?}");
+    }
+}
+
+#[test]
+#[ignore = "Explicit Vulkan subpixel cutout shadow coverage"]
+fn surface_gpu_cutout_shadow_filters_subpixel_alpha_without_softening_opaque_blocks() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let (width, height) = (4, 4);
+        let normal = Image::new(&host, width, height, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::with_mips(&host, 16, 16, vk::Format::R32G32B32A32_SFLOAT, true, 5);
+        let outputs = std::array::from_fn::<_, 2, _>(|_| {
+            Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, false)
+        });
+        host.begin();
+        normal.initialize(host.command, [0., 0., -1., 0.5]);
+        albedo.initialize(host.command, [0.4, 0.4, 0.4, 1.4]);
+        atlas.initialize(host.command, [1., 1., 1., 0.5]);
+        for image in &outputs {
+            image.initialize(host.command, [0.; 4]);
+        }
+        ray.barrier(host.command);
+        host.submit();
+        // Real fine alpha alternates 0/1; averaged mips represent half coverage.
+        let checker: Vec<[f32; 4]> = (0..256)
+            .map(|i| [1., 1., 1., ((i % 16 + i / 16) % 2) as f32])
+            .collect();
+        upload_capture(&host, &atlas, 16, 16, &checker);
+        let mut caster = triangle([[-2., -2., 0.], [2., -2., 0.], [0., 2., 0.]], 0.);
+        caster[12..18].copy_from_slice(&[0., 0., 1., 0., 0.5, 1.]);
+        caster[18] = 1.25;
+        ray.scene(&caster).unwrap();
+        let views = [
+            atlas.view.as_raw(),
+            normal.view.as_raw(),
+            albedo.view.as_raw(),
+        ];
+        let mut frame = identity_frame(width, height);
+        let mut phases = Vec::new();
+        for offset in [-0.04, 0., 0.04] {
+            frame[64] = offset;
+            let values = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+            let visibility = values[0][5][3];
+            phases.push(visibility);
+            assert!((visibility-0.5).abs()<0.02,"subpixel checker must retain half shadow coverage during camera motion: {phases:?}");
+        }
+        // Transmission remains multiplicative, including partial glass-like tint.
+        caster[23] = 0.5;
+        ray.scene(&caster).unwrap();
+        let transmitted = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert!((transmitted[0][5][3] - 0.75).abs() < 0.02);
+        // Legacy translucent alpha is a threshold, not geometric coverage.
+        caster[18] = 1.;
+        ray.scene(&caster).unwrap();
+        host.begin();
+        atlas.clear(host.command, [1., 1., 1., 0.2]);
+        ray.barrier(host.command);
+        host.submit();
+        let glass = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert!(
+            (glass[0][5][3] - 0.5).abs() < 0.002,
+            "legacy glass transmission must not be multiplied by its optical texture alpha"
+        );
+        // Fully opaque blocks bypass cutout filtering and stay completely shadowed.
+        caster[18] = 0.;
+        caster[23] = 0.;
+        ray.scene(&caster).unwrap();
+        let opaque = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        assert_eq!(opaque[0][5][3], 0.);
+        println!(
+            "cutout coverage phases={phases:?}; opaque={:?}",
+            opaque[0][5]
+        );
+    }
+}
+
+#[test]
+#[ignore = "Explicit Vulkan AO continuity across native workgroups"]
+fn surface_gpu_planar_occlusion_has_no_workgroup_seams() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let (width, height) = (32, 8);
+        let normal = Image::new(&host, width, height, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let outputs = std::array::from_fn::<_, 3, _>(|_| {
+            Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, false)
+        });
+        host.begin();
+        normal.initialize(host.command, [0., 0., -1., 0.5]);
+        albedo.initialize(host.command, [0.4, 0.4, 0.4, 1.4]);
+        atlas.initialize(host.command, [1.; 4]);
+        for image in &outputs {
+            image.initialize(host.command, [0.; 4]);
+        }
+        ray.barrier(host.command);
+        host.submit();
+        // A tilted infinite plane gives an affine hit distance in x for each
+        // fixed hemisphere direction. AO must inherit the same constant slope.
+        ray.scene(&triangle(
+            [[-100., -100., 24.], [100., -100., -26.], [0., 100., -1.]],
+            0.,
+        ))
+        .unwrap();
+        let mut frame = identity_frame(width, height);
+        frame[75] = 0.;
+        frame[77] = 1.;
+        let values = readback(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            [
+                atlas.view.as_raw(),
+                normal.view.as_raw(),
+                albedo.view.as_raw(),
+            ],
+            width,
+            height,
+        );
+        let row: Vec<f32> = values[2]
+            .iter()
+            .take(width as usize)
+            .map(|p| p[0])
+            .collect();
+        println!("planar AO={row:?}");
+        let slope = (row[29] - row[2]) / 27.;
+        assert!(slope.abs() > 0.001, "fixture must have a nonzero AO slope");
+        for x in 2..29 {
+            assert!(
+                ((row[x + 1] - row[x]) - slope).abs() < 0.0015,
+                "smooth geometry must not jump at native workgroup boundary {x}: {row:?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "Explicit Vulkan averaged GI atlas mip regression"]
+fn surface_gpu_diffuse_uses_coarse_atlas_mip_but_reflections_keep_detail() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let normal = Image::new(&host, 1, 1, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::with_mips(&host, 16, 16, vk::Format::R8G8B8A8_UNORM, true, 5);
+        let outputs = [
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false),
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false),
+        ];
+        host.begin();
+        normal.initialize(host.command, [0., 0., -1., 0.5]);
+        albedo.initialize(host.command, [0.4, 0.4, 0.4, 4.05]);
+        atlas.initialize(host.command, [0., 1., 0., 1.]);
+        host.device.cmd_clear_color_image(
+            host.command,
+            atlas.handle,
+            vk::ImageLayout::GENERAL,
+            &vk::ClearColorValue {
+                float32: [1., 0., 0., 1.],
+            },
+            &[range().base_mip_level(4)],
+        );
+        for image in &outputs {
+            image.initialize(host.command, [0.; 4]);
+        }
+        ray.barrier(host.command);
+        host.submit();
+        ray.scene(&triangle(
+            [[-100., -100., -2.], [100., -100., -2.], [0., 100., -2.]],
+            1.,
+        ))
+        .unwrap();
+        let mut frame = identity_frame(1, 1);
+        frame[75] = 0.;
+        frame[77] = 1.;
+        let views = [
+            atlas.view.as_raw(),
+            normal.view.as_raw(),
+            albedo.view.as_raw(),
+        ];
+        let values = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!(
+            values[0][0][0] > values[0][0][1] + 0.05,
+            "diffuse GI must use averaged red mip4 rather than project green mip0 detail: {:?}",
+            values[0][0]
+        );
+        assert!(
+            values[1][0][1] > values[1][0][0] + 0.1 && values[1][0][3] == 1.,
+            "reflection must still read detailed green mip0: {:?}",
+            values[1][0]
+        );
+        println!(
+            "coarse GI={:?}, detailed reflection={:?}",
+            values[0][0], values[1][0]
+        );
+    }
+}
+
+#[test]
+#[ignore = "Explicit Vulkan cave GI and actor block-light regression"]
+fn surface_gpu_cave_misses_do_not_add_sky_and_actors_shadow_local_lights() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let normal = Image::new(&host, 1, 1, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let skin = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let outputs = [
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false),
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false),
+        ];
+        host.begin();
+        normal.initialize(host.command, [0., 0., -1., 0.5]);
+        albedo.initialize(host.command, [0.4, 0.4, 0.4, 1.4]);
+        atlas.initialize(host.command, [1.; 4]);
+        skin.initialize(host.command, [1.; 4]);
+        for image in &outputs {
+            image.initialize(host.command, [0.; 4]);
+        }
+        ray.barrier(host.command);
+        host.submit();
+        // Keep the AS valid while every 12-block secondary ray misses.
+        ray.scene(&triangle(
+            [[100., -4., -4.], [100., 4., -4.], [100., 0., 4.]],
+            0.,
+        ))
+        .unwrap();
+        let views = [
+            atlas.view.as_raw(),
+            normal.view.as_raw(),
+            albedo.view.as_raw(),
+        ];
+        let mut frame = identity_frame(1, 1);
+        frame[75] = 0.; // no direct sun
+        frame[67] = 1.; // enclosed camera
+        let baseline = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        frame[77] = 1.; // GI enabled
+        let gi = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert_eq!(
+            gi[0], baseline[0],
+            "a miss is unknown geometry, not a source of sky radiance in a cave"
+        );
+
+        frame[77] = 0.;
+        ray.set_surface_lights(&[0., 0., -3., 15., 1., 1., 1., 0.], 1)
+            .unwrap();
+        let lit = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!(lit[0][0][0] > baseline[0][0][0] + 0.3);
+        let mut inverse = [0.; 16];
+        for axis in 0..4 {
+            inverse[axis * 5] = 1.;
+        }
+        inverse[12] = 0.5;
+        inverse[13] = 0.5;
+        inverse[14] = 1.; // centred actor between receiver and lamp
+        let actors = actor_box_payload(inverse, false);
+        let blocked = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&actors, skin.view.as_raw())),
+        );
+        assert!(
+            (blocked[0][0][0] - baseline[0][0][0]).abs() < 0.002,
+            "opaque actor must block local light: lit={:?}, blocked={:?}",
+            lit[0][0],
+            blocked[0][0]
+        );
+        inverse[12] = 1.; // receiver-to-light segment grazes the actor's side
+        let edge_actor = actor_box_payload(inverse, false);
+        let edge = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&edge_actor, skin.view.as_raw())),
+        );
+        assert!(
+            edge[0][0][0] > blocked[0][0][0] + 0.03 && edge[0][0][0] < lit[0][0][0] - 0.03,
+            "finite-area local light must give a penumbra at the actor silhouette: {:?}",
+            edge[0][0]
+        );
+        let second_light = [2., 0., -3., 15., 0.8, 0.8, 0.8, 0.];
+        ray.set_surface_lights(&second_light, 1).unwrap();
+        let second = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&edge_actor, skin.view.as_raw())),
+        );
+        let both_lights = [[0., 0., -3., 15., 1., 1., 1., 0.], second_light].concat();
+        ray.set_surface_lights(&both_lights, 2).unwrap();
+        let both = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&edge_actor, skin.view.as_raw())),
+        );
+        assert!(both[0][0][0] >= second[0][0][0] - 0.002, "a partially visible first light must not suppress a brighter visible second: both={:?}, second={:?}",both[0][0],second[0][0]);
+        ray.set_surface_lights(&both_lights[..8], 1).unwrap();
+        inverse[12] = 0.5;
+        inverse[10] = 10.;
+        inverse[14] = 28.;
+        let near_emitter_actor = actor_box_payload(inverse, false);
+        let near_emitter = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&near_emitter_actor, skin.view.as_raw())),
+        );
+        assert!((near_emitter[0][0][0] - baseline[0][0][0]).abs() < 0.002, "a thin actor inside the final 0.6 blocks before an emitter must still cast a shadow: {:?}",near_emitter[0][0]);
+        host.begin();
+        skin.clear(host.command, [1., 1., 1., 0.]);
+        ray.barrier(host.command);
+        host.submit();
+        let transparent = readback_actors(
+            &host,
+            &mut ray,
+            &frame,
+            &outputs,
+            views,
+            1,
+            1,
+            Some((&actors, skin.view.as_raw())),
+        );
+        assert_eq!(
+            transparent[0], lit[0],
+            "transparent actor skin must not cast a solid local shadow"
+        );
+        println!(
+            "cave baseline={:?} GI={:?}; local light={:?} actor shadow={:?}",
+            baseline[0][0], gi[0][0], lit[0][0], blocked[0][0]
+        );
+    }
 }
 
 #[test]

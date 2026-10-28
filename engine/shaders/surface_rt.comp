@@ -23,7 +23,8 @@ Triangle marineFetchTriangle(uint instance,uint primitive) {
     return ExternalTriangles(externals[instance].address).values[primitive];
 }
 vec2 triangleUV(Triangle t,vec2 bary) { return t.uv01.xy*(1.0-bary.x-bary.y)+t.uv01.zw*bary.x+t.uv2.xy*bary.y; }
-// uv2.z: 0 opaque atlas, 1 alpha-tested atlas, 2 untextured tint (non-atlas external models).
+// uv2.z: 0 opaque atlas, 1 legacy alpha-tested atlas, 1.25 filtered cutout,
+// 2 untextured tint (non-atlas external models). Older readers treat 1.25 as alpha-tested.
 vec4 triangleSurface(Triangle t,vec2 bary) {
     if(t.uv2.z>1.5) return vec4(t.tint.rgb,1);
     return textureLod(Atlas,triangleUV(t,bary),0.0)*vec4(t.tint.rgb,1);
@@ -58,24 +59,12 @@ bool blockLightOccluded(vec3 origin,vec3 direction,float reach) {
     while(rayQueryProceedEXT(ray)) {
         if(rayQueryGetIntersectionTypeEXT(ray,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
             Triangle t=marineFetchTriangle(rayQueryGetIntersectionInstanceCustomIndexEXT(ray,false),rayQueryGetIntersectionPrimitiveIndexEXT(ray,false));
-            if(t.uv2.z<.5 || t.uv2.z>1.5) rayQueryConfirmIntersectionEXT(ray);
+            if(t.uv2.z<.5 || t.uv2.z>1.5) {rayQueryTerminateEXT(ray);return true;}
         }
     }
-    return rayQueryGetIntersectionTypeEXT(ray,true)==gl_RayQueryCommittedIntersectionTriangleEXT;
+    return false;
 }
 #include "diffuse_samples.glsl"
-// Same quadrature rotated and radially offset per producer pixel. A 4x4 block covers 16
-// rotations, so the shared-memory filter integrates 64 directions instead of copying the
-// four fixed hit points as a sharp mirror-like image of nearby blocks.
-vec3 marineDiffuseDirection(vec3 normal,int index,uvec2 pixel) {
-    const uint bayer[16]=uint[16](0u,8u,2u,10u,12u,4u,14u,6u,3u,11u,1u,9u,15u,7u,13u,5u);
-    float phase=(float(bayer[(pixel.y&3u)*4u+(pixel.x&3u)])+.5)/16.0;
-    vec3 tangent=normalize(abs(normal.y)<.9?cross(normal,vec3(0,1,0)):cross(normal,vec3(1,0,0)));
-    vec3 bitangent=cross(normal,tangent);
-    float angle=.785398163+2.39996323*float(index)+phase*1.57079633;
-    float radius=sqrt((float(index)+phase)/4.0);
-    return normalize(tangent*cos(angle)*radius+bitangent*sin(angle)*radius+normal*sqrt(1.0-radius*radius));
-}
 layout(set=0,binding=5) uniform sampler2D SurfaceNormal;
 layout(set=0,binding=6) uniform sampler2D SurfaceAlbedo;
 #include "surface_actors.glsl"
@@ -87,6 +76,7 @@ vec3 hitNormal(Hit hit,vec3 direction) {
     vec3 normal=normalize(hit.normalMatrix*cross(t.b.xyz-t.a.xyz,t.c.xyz-t.a.xyz));
     return dot(normal,direction)>0 ? -normal : normal;
 }
+#include "surface_sun.glsl"
 float sunVisibility(vec3 pos,vec3 normal) {
     vec3 sun=normalize(Sun.xyz);
     if(Sun.w<=0.0 || dot(normal,sun)<=0.0) return 0.0;
@@ -99,6 +89,22 @@ vec3 sunIrradiance(vec3 pos,vec3 normal) {
 // Block and dynamic light sources: uvec4 header (count), then per light vec4(centre, level) and vec4(colour).
 struct SurfaceLight { vec4 position; vec4 color; };
 layout(std430,set=0,binding=10) readonly buffer SurfaceLights { uvec4 lightInfo; SurfaceLight surfaceLights[]; };
+float bounceEmission(Hit hit,vec3 position,vec3 direction) {
+    float emission=marineFetchTriangle(hit.instance,hit.primitive).uv2.w;
+    if(emission<=0.0)return 0.0;
+    if(hit.instance==0u && lightInfo.x>0u) {
+        // SurfaceLights already integrates this block emitter with visibility rays.
+        // Four sparse GI directions would add a second, projected emitter silhouette.
+        vec3 centre=floor(position+direction*.002)+vec3(.5);
+        for(uint i=0u;i<min(lightInfo.x,32u);i++) {
+            SurfaceLight light=surfaceLights[i];
+            if(light.position.w>0.0 && all(lessThan(abs(light.position.xyz-centre),vec3(.01))))return 0.0;
+        }
+    }
+    // Keep the legacy fallback for emitters not represented by the local-light table.
+    float weight=lightInfo.x>0u?smoothstep(2.0,6.0,hit.distance):1.0;
+    return emission*.45*weight;
+}
 // Vanilla's block light curve (level falls one per block) per source; only the four brightest
 // candidates get an occlusion ray, and the strongest visible one wins like the lightmap.
 vec3 tracedBlockLight(vec3 pos,vec3 normal) {
@@ -116,15 +122,37 @@ vec3 tracedBlockLight(vec3 pos,vec3 normal) {
         int slot=-1;float lowest=1e9;
         for(int k=0;k<4;k++) if(weight[k]<lowest){lowest=weight[k];slot=k;}
         if(w<=lowest) continue;
-        value[slot]=v;direction[slot]=dir;reach[slot]=max(distance-.6,.02);weight[slot]=w;
+        value[slot]=v;direction[slot]=dir;reach[slot]=distance;weight[slot]=w;
     }
     vec3 strongest=vec3(0);
     for(int pass=0;pass<4;pass++) {
         int best=-1;float top=0.0;
         for(int k=0;k<4;k++) if(weight[k]>top){top=weight[k];best=k;}
         if(best<0) break;
+        if(top<=max(strongest.r,max(strongest.g,strongest.b)))break;
         weight[best]=0.0;
-        if(!blockLightOccluded(pos+normal*.035,direction[best],reach[best])){strongest=value[best];break;}
+        vec3 origin=pos+normal*.035;
+        vec3 axis=abs(direction[best].y)<.9?vec3(0,1,0):vec3(1,0,0);
+        vec3 tangent=normalize(cross(direction[best],axis));
+        vec3 bitangent=cross(direction[best],tangent);
+        float visible=0.0;
+        // A small, world-oriented emitter disk gives finite penumbrae without a
+        // moving screen-space seed. Reconstruct between these samples on the material.
+        for(int tap=0;tap<2;tap++) {
+            float angle=3.141592654*float(tap);
+            vec3 offset=(tangent*cos(angle)+bitangent*sin(angle))*.18;
+            vec3 segment=direction[best]*reach[best]+offset-normal*.035;
+            float distance=length(segment),limit=max(distance-.6,.02);
+            vec3 dir=segment/distance;
+            // Block rays stop before the emitter's own geometry. Actor rays use
+            // the actual endpoint, so a nearby hand/arm can still cast a shadow.
+            if(!blockLightOccluded(origin,dir,limit) && !actorOccluded(origin,dir,max(distance-.015,.02))) visible+=.5;
+        }
+        vec3 candidate=value[best]*visible;
+        if(max(candidate.r,max(candidate.g,candidate.b))>max(strongest.r,max(strongest.g,strongest.b))) strongest=candidate;
+        // Candidates are ordered by unoccluded intensity. Only full visibility
+        // proves no remaining source can beat the current result.
+        if(visible>.999)break;
     }
     return strongest;
 }
@@ -132,12 +160,25 @@ vec3 tracedBlockLight(vec3 pos,vec3 normal) {
 // reproduce the neighbouring block's texture (campfire flames on dirt, grass on wool).
 vec3 linearBounceSurface(Hit hit) {
     Triangle t=marineFetchTriangle(hit.instance,hit.primitive);
-    vec3 albedo=t.uv2.z>1.5?t.tint.rgb:textureLod(Atlas,triangleUV(t,hit.bary),4.0).rgb*t.tint.rgb;
+    vec3 albedo=t.tint.rgb;
+    if(t.uv2.z<1.5) {
+        int coarse=min(4,textureQueryLevels(Atlas)-1);
+        if(coarse==4) albedo*=textureLod(Atlas,triangleUV(t,hit.bary),4.0).rgb;
+        else {
+            // Mipmaps may be disabled by the host. A clamped LOD4 lookup then
+            // projects full-detail texels into GI. Use a UV-independent, bounded
+            // four-point colour estimate over this sprite instead.
+            vec2 lower=min(t.uv01.xy,min(t.uv01.zw,t.uv2.xy));
+            vec2 upper=max(t.uv01.xy,max(t.uv01.zw,t.uv2.xy));
+            vec3 mean=textureLod(Atlas,mix(lower,upper,vec2(.25,.25)),float(coarse)).rgb;
+            mean+=textureLod(Atlas,mix(lower,upper,vec2(.75,.25)),float(coarse)).rgb;
+            mean+=textureLod(Atlas,mix(lower,upper,vec2(.25,.75)),float(coarse)).rgb;
+            mean+=textureLod(Atlas,mix(lower,upper,vec2(.75,.75)),float(coarse)).rgb;
+            albedo*=mean*.25;
+        }
+    }
     return pow(max(albedo,vec3(0)),vec3(2.2));
 }
-shared vec4 bounceShared[64];
-shared vec4 planeShared[64];
-shared float openShared[64];
 void main() {
     uvec2 p=gl_GlobalInvocationID.xy;uint width=uint(Viewport.x),height=uint(Viewport.y);
     bool inside=p.x<width && p.y<height;
@@ -146,7 +187,6 @@ void main() {
     vec4 lighting=vec4(0),reflection=vec4(0),extra=vec4(1,0,0,1.0+clamp(Camera.w,0.0,1.0));
     float open=4.0;
     vec3 pos=vec3(0),normal=vec3(0),diffuseBounce=vec3(0);
-    bool surface=false;
     if(inside) {
         ivec2 captureSize=textureSize(SurfaceNormal,0);
         // Integer centre mapping avoids rounding either side of exact nearest-texel boundaries.
@@ -175,7 +215,6 @@ void main() {
             extra.yz=vec2(lit/float(steps),reach);
         }
         if(captured) {
-            surface=true;
             // The paired RayCamera inverses include the same bob/hurt perspective eye shift.
             float clipDepth=Viewport.z>.5?normalDepth.w:normalDepth.w*2.0-1.0;
             vec4 local=InverseProjection*vec4(uv*2.0-1.0,clipDepth,1.0);
@@ -184,7 +223,8 @@ void main() {
             vec3 incoming=normalize(pos-eye);
             normal=normalize(normalDepth.xyz);
             if(dot(normal,incoming)>0.0) normal=-normal;
-            float visibility=sunVisibility(pos,normal);
+            vec3 sun=normalize(Sun.xyz);
+            float visibility=Sun.w>0.0 && dot(normal,sun)>0.0?traceSurfaceSunTransmission(pos,normal,sun,uv,normalDepth.w):0.0;
             if(visibility>0.0) visibility*=actorSunVisibility(pos+normal*.035,normalize(Sun.xyz));
             float diffuse=max(dot(normal,normalize(Sun.xyz)),0.0);
             lighting=vec4(vec3(max(Options.x,0.0)+diffuse*max(Sun.w,0.0)*visibility),visibility);
@@ -194,7 +234,7 @@ void main() {
             if(Options.y>0.0) {
                 open=0.0;
                 for(int j=0;j<4;j++) {
-                    vec3 bounce=marineDiffuseDirection(normal,j,p);
+                    vec3 bounce=marineDiffuseDirection(normal,j);
                     Hit secondary=trace(pos+normal*.035,bounce,12.0);
                     // Local occlusion: geometry within six blocks darkens ambient light.
                     open+=secondary.found?clamp(secondary.distance/6.0,0.0,1.0):1.0;
@@ -203,12 +243,13 @@ void main() {
                         vec3 secondaryNormal=hitNormal(secondary,bounce);
                         // Direct sun and emission only: the flat sky ambient on every hit lit enclosed
                         // caves as if under open sky (sky light arrives through the miss rays below).
-                        // Near emitters are already traced lights with shadows (SurfaceLights); their emission in
-                        // these four fixed-direction rays stamped copies of lanterns, campfires and held torches on walls.
-                        float emissionWeight=lightInfo.x>0u?smoothstep(2.0,6.0,secondary.distance):1.0;
-                        diffuseBounce+=linearBounceSurface(secondary)*(sunIrradiance(secondaryPos,secondaryNormal)-vec3(max(Options.x,0.0))
-                            +vec3(marineFetchTriangle(secondary.instance,secondary.primitive).uv2.w*.45*emissionWeight));
-                    } else diffuseBounce+=vec3(.10,.15,.22)*(max(Options.x,0.0)/.45);
+                        vec3 irradiance=sunIrradiance(secondaryPos,secondaryNormal)-vec3(max(Options.x,0.0))
+                            +vec3(bounceEmission(secondary,secondaryPos,bounce));
+                        // Unlit geometry and already integrated emitters need no albedo lookup.
+                        if(any(greaterThan(irradiance,vec3(0))))diffuseBounce+=linearBounceSurface(secondary)*irradiance;
+                    }
+                    // A miss is unknown beyond the finite scene, not visible sky. Terrain
+                    // already supplies ambient using the surface's Minecraft sky light.
                 }
                 diffuseBounce*=Options.y*.25;
             }
@@ -230,27 +271,11 @@ void main() {
             }
         }
     }
-    // Spatial bounce filter inside the 8x8 group: a 5x5 window (shifted to stay inside the
-    // tile) always spans all 16 direction rotations. Only same-plane neighbours contribute.
-    uint slot=gl_LocalInvocationID.y*8u+gl_LocalInvocationID.x;
-    bounceShared[slot]=vec4(diffuseBounce,surface?1.0:0.0);
-    planeShared[slot]=vec4(normal,dot(normal,pos));
-    openShared[slot]=open*.25;
-    barrier();
-    if(surface && Options.y>0.0) {
-        ivec2 lo=clamp(ivec2(gl_LocalInvocationID.xy)-2,ivec2(0),ivec2(3));
-        float distance=length(pos-(Camera.xyz+InverseView[3].xyz));
-        float planeTolerance=max(.04,distance*.004);
-        vec4 sum=vec4(0);float openSum=0.0;
-        for(int y=0;y<5;y++) for(int x=0;x<5;x++) {
-            uint other=uint(lo.y+y)*8u+uint(lo.x+x);
-            vec4 sample_=bounceShared[other];vec4 plane=planeShared[other];
-            if(sample_.w<.5 || dot(plane.xyz,normal)<.9 || abs(plane.w-dot(normal,pos))>planeTolerance) continue;
-            sum+=vec4(sample_.rgb,1);openSum+=openShared[other];
-        }
-        lighting.rgb+=sum.w>0.0?sum.rgb/sum.w:diffuseBounce;
-        extra.x=sum.w>0.0?openSum/sum.w:open*.25;
-    }
+    // Publish each surfel at its actual position. Geometry-aware reconstruction
+    // filters GI/AO across the complete image; clamping a neighbourhood inside
+    // an 8x8 workgroup shifted it by two texels and drew crawling tile seams.
+    lighting.rgb+=diffuseBounce;
+    extra.x=open*.25;
     if(!inside) return;
     pixels[i*2]=packHalf2x16(lighting.xy);pixels[i*2+1]=packHalf2x16(lighting.zw);
     uint reflectionBase=(count*2+3)&~3u;

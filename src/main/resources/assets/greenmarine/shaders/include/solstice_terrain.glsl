@@ -91,6 +91,8 @@ void main() {
 #endif
     vec4 sampled=UseRgss==1?sampleRGSS(Sampler0,texCoord0,1.0/TextureSize):sampleNearest(Sampler0,texCoord0,1.0/TextureSize);
     vec4 color=sampled*vertexColor;
+    // Preserve optical alpha in OIT as well: translucent surfaces/particles behind
+    // the water are not present in the opaque refraction copy.
     if(water) color.a=marineParameter(SOL_SURFACE_DEBUG)>6.5?1.0:marineParameter(SOL_WATER_ALPHA);
 #ifdef ALPHA_CUTOUT
     if(color.a<ALPHA_CUTOUT) discard;
@@ -163,9 +165,13 @@ void main() {
         // only the part of the sun ray after it leaves the scene, so windows and roofs stay exact.
         vec3 inverse=1.0/max(abs(SurfaceSun.xyz),vec3(1e-4))*sign(SurfaceSun.xyz+vec3(1e-6));
         vec3 exits=max((RayBoundsMin.xyz-surfacePosition)*inverse,(RayBoundsMax.xyz-surfacePosition)*inverse);
-        float leave=nativeCoverage>0.0?max(min(exits.x,min(exits.y,exits.z)),1.0):1.0;
-        float columns=marineHeightFieldSun(surfacePosition+normal*.1,SurfaceSun.xyz,leave);
-        sunVisibility*=columns;
+        float leave=max(min(exits.x,min(exits.y,exits.z)),1.0);
+        float localColumns=nativeCoverage<1.0?marineHeightFieldSun(surfacePosition+normal*.1,SurfaceSun.xyz,1.0):1.0;
+        float tracedColumns=nativeCoverage>0.0?marineHeightFieldSun(surfacePosition+normal*.1,SurfaceSun.xyz,leave):1.0;
+        // Blend complete shadow solutions. Switching the start distance as soon as
+        // coverage becomes positive turned a fully shadowed roof into full sun.
+        float columns=mix(localColumns,tracedColumns,nativeCoverage);
+        sunVisibility=mix(localVisibility*localColumns,clamp(nativeLight.a,0.0,1.0)*tracedColumns,nativeCoverage);
         // Diagnostic 8: height-field sun visibility (white lit, red shadowed by distant columns).
         if(abs(marineParameter(SOL_SURFACE_DEBUG)-8.0)<.5) {fragColor=vec4(1,columns,columns,1);return;}
     } else if(!water && abs(marineParameter(SOL_SURFACE_DEBUG)-8.0)<.5) {fragColor=vec4(.2,.2,.2,1);return;}
@@ -197,7 +203,10 @@ void main() {
             }
             if(opaqueDepth>1e-6) thickness=clamp(length(behind)-length(surfacePosition),0.0,30.0);
         }
-        vec3 transmission=exp(-vec3(.38,.10,.052)*max(.15,thickness)*marineParameter(SOL_ABSORPTION));
+        // Spectral absorption plus suspended-particle extinction. Opacity also
+        // controls optical density while retaining host transparency ordering.
+        float opticalDensity=marineParameter(SOL_ABSORPTION)*marineParameter(SOL_WATER_ALPHA);
+        vec3 transmission=exp(-vec3(.70,.32,.22)*max(.25,thickness)*opticalDensity);
         vec3 underwater=solLinear(texture(MarineOpaqueColor,refracted).rgb);
         lit=mix(absorptionColor,underwater,transmission);
         vec3 reflection=solSky(reflected,true)*marineSkyVisibility(surfaceLight.y);

@@ -35,21 +35,54 @@ Entities, block entities, particles, rain, hand and GUI keep their host shaders.
 
 - **Sun shadows** come from the native shadow ray. Glass transmits sunlight through
   per-triangle transmission (stained glass attenuates intensity, without colour);
-  tinted glass blocks it. Cutout textures (leaves, grass) are alpha tested.
-- **Player shadow.** The local player's posed body casts a sun shadow onto terrain,
-  in first and third person, alpha tested against the skin. See
+  tinted glass blocks it. Binary cutout textures (leaves, grass) use filtered alpha
+  coverage over each reduced receiver pixel for primary sunlight, reducing shadow
+  crawling while walking. Opaque silhouette edges retain the point-ray behavior;
+  this does not supersample every geometric edge. Translucent/legacy texture alpha
+  retains its threshold and material transmission.
+- **Player shadow.** The local player's posed body casts sun and nearby block-light
+  shadows onto terrain, in first and third person, alpha tested against the skin. See
   [actor reflections](ACTOR-REFLECTIONS.md).
+- **Local lights.** Within 16 blocks of the eye (fading to the lightmap by 24), up to
+  four candidates from the 32 nearest sources receive two visibility rays over a
+  small emitter disk. The strongest visible contribution wins. Sources include
+  emitting blocks, held and dropped emitting block items, burning entities, lava
+  buckets, blaze rods/powder, glowstone dust, glow berries, glow ink sacs and magma
+  cream. Dynamic positions interpolate between ticks. Item/entity models retain
+  their host shading; this supplies light to terrain, not custom emissive item shaders.
+  Emitting blocks present in this source table are integrated once: their emissive
+  mesh is not added again by the sparse GI rays. Unrepresented/external emitters
+  retain the GI emission fallback.
 - **Diffuse GI** uses four fixed cosine-distributed directions around the normal.
   The directions do not depend on position, so lighting is stable while the camera
-  moves. Strength is `giStrength`.
+  moves. A miss adds no sky radiance: terrain already supplies sky ambient using
+  Minecraft skylight, including enclosed caves. Bounces sample atlas mip four to
+  average fine texture detail. When the host atlas lacks that mip, a fixed four-point
+  sprite-colour estimate at the coarsest available level avoids projecting detailed
+  source textures; it is an approximation of the sprite mean. Reflection and detailed
+  hit-test lookups retain mip zero.
+  Strength is `giStrength`.
+  GI/AO producers keep their own positions; geometry-aware image reconstruction
+  smooths them without shifting a filter window at native workgroup boundaries.
+- **Material corners.** Geometry-matched lighting taps are renormalized on their
+  own face when valid samples exist. Rejected taps on the neighboring face do not
+  restore unshadowed lightmap illumination; a face with no matching producer still
+  uses raster fallback. Reflection footprint confidence is evaluated separately.
 - **Ambient occlusion.** The four GI rays also measure local occlusion: a hit closer
   than six blocks darkens sky ambient and, at 60 %, block light. Strength is
   `occlusion`.
 - **Volumetric sunlight.** The native pass marches each reduced camera ray to the
   captured surface (at most 48 blocks, the scene region) with one sun shadow ray per
-  step: 4, 6, 8 or 12 steps from Low to Ultra, none when `volumetric` is 0. The scene
-  pass filters the sunlit fraction over 3x3 reduced texels and adds forward-scattered
-  sunlight, so canopies, walls and cave mouths cast visible shafts.
+  step: 8, 12, 16 or 24 steps from Low to Ultra, none when `volumetric` is 0. The scene
+  pass applies a 3x3 median filter (rejecting isolated fireflies) and a tent filter over
+  the reduced texels, then adds forward-scattered sunlight, so canopies, walls and cave
+  mouths cast visible shafts. A sun ray that leaves the traced scene is checked against
+  the distant height field, so escaping into a mountain or tunnel wall does not light the
+  air; a cave-mouth exit stays lit.
+  Moonlight still casts surface shadows, but does not schedule unused sun-shaft rays.
+  Clear outdoor air uses lower density than enclosed window-beam scenes. Equal air
+  paths scatter equally at sky and terrain endpoints, including cutout foliage;
+  selecting a terrain pixel does not multiply its haze brightness.
 - **Sun highlight and relief.** Every surface receives a GGX sun highlight masked by
   the traced sun visibility (`specular`). `relief` turns atlas luminance into a height
   field inside 16-texel tiles and tilts the shading normal; it fades once a texel is
@@ -59,7 +92,10 @@ Entities, block entities, particles, rain, hand and GUI keep their host shaders.
   High/Ultra when hardware is unavailable). Full opaque cells occlude; slabs,
   foliage and entities do not; shadows fade over two cells at the grid edge.
 - Native lighting fades out at the finite loaded scene boundary. Vanilla block
-  light and emissive accents keep their raster contribution.
+  light and emissive accents keep their raster contribution. Local and native sun
+  solutions include their own height-field test before blending, avoiding a boolean
+  switch at the first native sample. Distant column shadows exclude leaves; nearby
+  foliage still uses its actual alpha-tested model.
 
 ## Materials and reflections
 
@@ -95,12 +131,19 @@ mirrors. Snow is a top-face overlay; lightning brightens the sky.
 |---|---|---|---|---|
 | Low | ceil(viewport / 4) | up to 4 taps | off | base octaves |
 | Medium | ceil(viewport / 4) | up to 4 taps | 9 taps | base octaves |
-| High | ceil(viewport / 2) | up to 16 taps on rough reflectors | 9 taps | extra octaves |
-| Ultra | ceil(viewport / 2) | up to 16 taps on rough reflectors | 25 taps | extra octaves |
+| High | ceil(viewport / 3) | up to 16 taps, lighting radius 1.5 | 9 taps | extra octaves |
+| Ultra | ceil(viewport / 2) | up to 16 taps, lighting radius 2 | 25 taps | extra octaves |
 
 Material capture always runs at full resolution so reduced samples can be validated
-against their producing surface (class, roughness, normal, plane). Changing quality
+against their producing surface. Lighting follows normal and plane across material
+boundaries; reflections additionally match class and roughness. Changing quality
 rebuilds the RT targets.
+
+Ultra traces about 2.25 times as many native pixels as High at large viewport sizes.
+Custom packs retain their existing half-resolution native output. The night sky uses
+angular point stars with neighboring-cell/face filtering; star positions stay fixed
+when the camera moves. Water retains host transparency ordering and applies stronger
+spectral extinction, including suspended-particle haze, so deep water is less clear.
 
 ## Controls
 

@@ -45,7 +45,9 @@ public final class HeightField implements AutoCloseable {
                 if(worldX>>4!=chunkX) {chunkX=worldX>>4;chunk=source.getChunk(chunkX,worldZ>>4,ChunkStatus.FULL,false);}
                 int index=Math.floorMod(worldZ,SIZE)*SIZE+Math.floorMod(worldX,SIZE);
                 if(chunk==null) {heights[index]=0;continue;}
-                int top=chunk.getHeight(Heightmap.Types.MOTION_BLOCKING,worldX&15,worldZ&15)+1;
+                // A coarse column cannot represent gaps/transmission through a canopy.
+                // Leaves are traced as real alpha-tested geometry in the local scene.
+                int top=chunk.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES,worldX&15,worldZ&15)+1;
                 int tag=((worldX>>9)&7)|(((worldZ>>9)&7)<<3);
                 heights[index]=(Math.clamp(top+2048,0,65535))|(tag<<16)|(1<<24);
             }

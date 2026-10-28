@@ -10,6 +10,8 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def sampler(shader):
     text=(ROOT/'engine/shaders'/shader).read_text()
+    if 'vec3 marineDiffuseDirection(vec3 normal,int index,uvec2 pixel)' in text:
+        return 'return marineDiffuseDirection(normal,index,uvec2(uint(pos.x*100000.0),0u));'
     if 'marineDiffuseDirection(normal,' in text:
         return 'return marineDiffuseDirection(normal,index);'
     result=[]
@@ -18,10 +20,18 @@ def sampler(shader):
         result.append(re.search(pattern,text).group())
     return '\n'.join(result).replace('float(j)','float(index)').replace('float(bounceIndex)','float(index)')+'\nreturn bounce;'
 
+def native_overload():
+    # Exercise the actual surface overload when present, rather than silently testing
+    # the unused two-argument helper while production uses screen-dependent directions.
+    text=(ROOT/'engine/shaders/surface_rt.comp').read_text()
+    found=re.search(r'vec3 marineDiffuseDirection\(vec3 normal,int index,uvec2 pixel\) \{.*?\n\}',text,re.S)
+    return found.group() if found else ''
+
 class DiffuseStabilityTest(unittest.TestCase):
     def test_actual_glsl_has_no_spatial_seed_step_in_constant_directional_light(self):
         helper=ROOT/'engine/shaders/diffuse_samples.glsl'
         common=helper.read_text() if helper.exists() else ''
+        common+=native_overload()
         common+='''
         #include <greenmarine:frame.glsl>
         #include <greenmarine:surface_rays.glsl>
@@ -65,8 +75,11 @@ class DiffuseStabilityTest(unittest.TestCase):
         float fract(float a){return a-std::floor(a);}
         float hash(float value){return fract(sin(value*12.9898)*43758.5453);}
         struct{vec2 zw={0,0};}Options;
+        using uint=unsigned;
+        struct uvec2{uint x,y;uvec2(uint a,uint b):x(a),y(b){}};
         '''
         if helper.exists():header+='\n#include "'+str(helper)+'"\n'
+        header+='\n'+re.sub(r'uint\[16\]\(([^)]+)\)',r'{\1}',native_overload())
         for shader in ('surface_rt.comp','world_rt.comp'):
             with self.subTest(shader=shader),tempfile.TemporaryDirectory() as directory:
                 source=header+'\nvec3 sample(vec3 pos,vec3 normal,int index){'+sampler(shader)+r'''

@@ -904,7 +904,7 @@ impl SurfaceState {
                     .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
                     .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                     .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-                    .max_lod(0.),
+                    .max_lod(vk::LOD_CLAMP_NONE),
                 None,
             )
             .map_err(error)?;

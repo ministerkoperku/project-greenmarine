@@ -40,6 +40,10 @@ public final class TriangleScene {
             triangle(positions,uv,tint,emission,cutout,0);
         }
         public void triangle(float[] positions,float[] uv,int tint,int emission,boolean cutout,float sunlightTransmission) {
+            triangle(positions,uv,tint,emission,cutout,sunlightTransmission,false);
+        }
+        /** Internal coverage flag remains in the legacy alpha-tested range [0.5,1.5). */
+        void triangle(float[] positions,float[] uv,int tint,int emission,boolean cutout,float sunlightTransmission,boolean filterCutout) {
             requireOpen();
             if(!Float.isFinite(sunlightTransmission)||sunlightTransmission<0||sunlightTransmission>1)throw new IllegalArgumentException("Invalid sunlight transmission");
             if(positions.length!=9 || uv.length!=6 || emission<0 || emission>15) throw new IllegalArgumentException("Invalid triangle data");
@@ -55,7 +59,7 @@ public final class TriangleScene {
                 data.flip();next.put(data);data=next;
             }
             for(int i=0;i<3;i++) { for(int j=0;j<3;j++) put(positions[i*3+j]);put(0); }
-            for(int i=0;i<4;i++) put(uv[i]);put(uv[4]);put(uv[5]);put(cutout?1:0);put(emission);
+            for(int i=0;i<4;i++) put(uv[i]);put(uv[4]);put(uv[5]);put(cutout?(filterCutout?1.25f:1):0);put(emission);
             put((tint>>16&255)/255f);put((tint>>8&255)/255f);put((tint&255)/255f);put(sunlightTransmission);count++;
         }
         /** Append immutable local geometry, rebasing only positions and preserving material bits. */

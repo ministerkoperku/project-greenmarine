@@ -428,8 +428,9 @@ public final class RayWorld {
         return Math.clamp(indoor,0f,1f);
     }
     private static int volumetricSteps() {
-        if(parameter("volumetric",0f)<=0f)return 0;
-        return switch(ShaderRuntime.settings().quality()) {case LOW->4;case MEDIUM->6;case HIGH->8;case ULTRA->12;};
+        var sky=Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.skyRenderState;
+        return RaySun.volumetricSteps(ShaderRuntime.settings().quality(),sky.sunAngle,sky.rainBrightness,
+            sky.skybox==net.minecraft.world.level.dimension.DimensionType.Skybox.OVERWORLD,parameter("volumetric",0f));
     }
     private static float parameter(String name,float fallback) {
         var pack=ShaderRuntime.active();var script=ShaderRuntime.script();

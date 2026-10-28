@@ -27,6 +27,9 @@ public final class WorldSceneScanner {
     private final RandomSource random=RandomSource.create(0);
     private final float[] vertices=new float[9],uv=new float[6];
     private final Map<net.minecraft.world.level.block.Block,Float> transmission=new IdentityHashMap<>();
+    private final BlockTintMemo tints=new BlockTintMemo();
+    private final java.util.function.IntUnaryOperator tintLookup=this::tintColour;
+    private net.minecraft.world.level.block.state.BlockState tintState;
     private SectionSceneCache.Ticket ticket;
     private TriangleScene.Builder staging;
     private Object world;
@@ -106,6 +109,7 @@ public final class WorldSceneScanner {
                     budget--;scannedBlocks++;
                     var state=chunk.getBlockState(position.set(key.blockX()+dx,key.blockY()+dy,key.blockZ()+dz));
                     if(state.getRenderShape()!=RenderShape.MODEL)continue;
+                    tints.reset();tintState=state;
                     parts.clear();random.setSeed(state.getSeed(position));
                     client.getModelManager().getBlockStateModelSet().get(state).collectParts(random,parts);
                     var offset=state.getOffset(position);
@@ -130,10 +134,7 @@ public final class WorldSceneScanner {
         for(var quad:quads) {
             if(!quad.materialInfo().sprite().atlasLocation().equals(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS))continue;
             int tint=0xFFFFFF;
-            if(quad.materialInfo().isTinted()) {
-                var source=client.getBlockColors().getTintSource(state,quad.materialInfo().tintIndex());
-                if(source!=null)tint=source.colorInWorld(state,client.level,position);
-            }
+            if(quad.materialInfo().isTinted())tint=tints.colour(quad.materialInfo().tintIndex(),tintLookup);
             for(int triangle=0;triangle<2;triangle++) {
                 for(int corner=0;corner<3;corner++) {
                     int index=triangle==0?corner:corner==0?0:corner==1?2:3;
@@ -141,9 +142,15 @@ public final class WorldSceneScanner {
                     long packed=quad.packedUV(index);uv[corner*2]=UVPair.unpackU(packed);uv[corner*2+1]=UVPair.unpackV(packed);
                 }
                 staging.triangle(vertices,uv,tint,Math.max(emission,quad.materialInfo().lightEmission()),
-                    quad.materialInfo().layer()!=net.minecraft.client.renderer.chunk.ChunkSectionLayer.SOLID,sunlight);
+                    quad.materialInfo().layer()!=net.minecraft.client.renderer.chunk.ChunkSectionLayer.SOLID,sunlight,
+                    quad.materialInfo().layer()==net.minecraft.client.renderer.chunk.ChunkSectionLayer.CUTOUT
+                        && !quad.materialInfo().sprite().transparency().hasTranslucent());
             }
         }
+    }
+    private int tintColour(int index) {
+        var client=Minecraft.getInstance();var source=client.getBlockColors().getTintSource(tintState,index);
+        return source==null?0xFFFFFF:source.colorInWorld(tintState,client.level,position);
     }
     /** Explicit legacy assembly. New callers assemble snapshot() on their worker. */
     public TriangleScene completed() {
