@@ -53,13 +53,21 @@ Hit trace(vec3 origin,vec3 direction,float reach) {
 
 // Block-light occlusion ignores alpha-tested geometry: grass, flowers and leaves around a held
 // torch otherwise stamp sharp blade shadows on the block under the player.
-bool blockLightOccluded(vec3 origin,vec3 direction,float reach) {
+bool blockLightOccluded(vec3 origin,vec3 direction,float reach,vec3 lightPosition) {
     rayQueryEXT ray;
     rayQueryInitializeEXT(ray,World,gl_RayFlagsNoneEXT,255,origin,.015,direction,reach);
     while(rayQueryProceedEXT(ray)) {
         if(rayQueryGetIntersectionTypeEXT(ray,false)==gl_RayQueryCandidateIntersectionTriangleEXT) {
-            Triangle t=marineFetchTriangle(rayQueryGetIntersectionInstanceCustomIndexEXT(ray,false),rayQueryGetIntersectionPrimitiveIndexEXT(ray,false));
-            if(t.uv2.z<.5 || t.uv2.z>1.5) {rayQueryTerminateEXT(ray);return true;}
+            uint instance=rayQueryGetIntersectionInstanceCustomIndexEXT(ray,false);
+            Triangle t=marineFetchTriangle(instance,rayQueryGetIntersectionPrimitiveIndexEXT(ray,false));
+            if(t.uv2.z<.5 || t.uv2.z>1.5) {
+                // The source may be inside its own emissive block. Exempt only
+                // that block's emitting surface; a fixed endpoint gap also hid
+                // unrelated walls near a held light as the player approached.
+                vec3 insideHit=origin+direction*(rayQueryGetIntersectionTEXT(ray,false)+.002);
+                if(instance==0u && t.uv2.w>0.0 && all(equal(floor(insideHit),floor(lightPosition)))) continue;
+                rayQueryTerminateEXT(ray);return true;
+            }
         }
     }
     return false;
@@ -132,21 +140,18 @@ vec3 tracedBlockLight(vec3 pos,vec3 normal) {
         if(top<=max(strongest.r,max(strongest.g,strongest.b)))break;
         weight[best]=0.0;
         vec3 origin=pos+normal*.035;
-        vec3 axis=abs(direction[best].y)<.9?vec3(0,1,0):vec3(1,0,0);
-        vec3 tangent=normalize(cross(direction[best],axis));
-        vec3 bitangent=cross(direction[best],tangent);
         float visible=0.0;
-        // A small, world-oriented emitter disk gives finite penumbrae without a
-        // moving screen-space seed. Reconstruct between these samples on the material.
+        // The emitter owns its sample positions. A receiver-facing disk basis
+        // switched axes near vertical rays, rotating both samples discontinuously
+        // and halving visibility after a microscopic receiver movement.
+        // Two opposite points keep the existing .18 radius and ray budget.
         for(int tap=0;tap<2;tap++) {
-            float angle=3.141592654*float(tap);
-            vec3 offset=(tangent*cos(angle)+bitangent*sin(angle))*.18;
+            vec3 offset=vec3(.12727922,0,.12727922)*(tap==0?1.0:-1.0);
             vec3 segment=direction[best]*reach[best]+offset-normal*.035;
-            float distance=length(segment),limit=max(distance-.6,.02);
+            float distance=length(segment),limit=max(distance-.015,.02);
             vec3 dir=segment/distance;
-            // Block rays stop before the emitter's own geometry. Actor rays use
-            // the actual endpoint, so a nearby hand/arm can still cast a shadow.
-            if(!blockLightOccluded(origin,dir,limit) && !actorOccluded(origin,dir,max(distance-.015,.02))) visible+=.5;
+            // Both visibility tests cover the complete receiver-to-light segment.
+            if(!blockLightOccluded(origin,dir,limit,pos+direction[best]*reach[best]) && !actorOccluded(origin,dir,limit)) visible+=.5;
         }
         vec3 candidate=value[best]*visible;
         if(max(candidate.r,max(candidate.g,candidate.b))>max(strongest.r,max(strongest.g,strongest.b))) strongest=candidate;

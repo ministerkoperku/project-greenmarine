@@ -25,9 +25,11 @@ import java.util.*;
 /** Pack-owned world pipeline variants and per-frame material inputs. */
 public final class WorldPrograms {
     public static final int SURFACE_BYTES=128;
-    private static final Map<String,RenderPipeline> HOST=new HashMap<>();
+    private static final Map<String,RenderPipeline> HOST=new java.util.concurrent.ConcurrentHashMap<>();
     private static final Map<String,CompiledRenderPipeline> VARIANTS=new HashMap<>();
     private static final Set<CompiledRenderPipeline> OWNED=Collections.newSetFromMap(new IdentityHashMap<>());
+    private static final WorldMrt MRT=new WorldMrt();
+    private static final Map<CompiledRenderPipeline,PackProgram> BINDINGS=new IdentityHashMap<>();
     private static final OpaqueScene OPAQUE=new OpaqueScene();
     private static final SurfaceScene MATERIALS=new SurfaceScene();
     private static final BackgroundSky BACKGROUND=new BackgroundSky();
@@ -49,8 +51,22 @@ public final class WorldPrograms {
     private static int mainMeasurement=-1;
     private static long mainFrames;
     private static final PerformanceSamples COPY_CPU=new PerformanceSamples();
+    /** Input refresh precedes early pack passes; allocation later consumes that refresh once.
+     * Finishing or a failed refresh cannot carry an unconsumed marker into another frame. */
+    static final class InputLifecycle {
+        private boolean pending;
+        void begin(Runnable initialize) {
+            pending=false;initialize.run();pending=true;
+        }
+        void consume(Runnable initialize) {
+            boolean alreadyBegun=pending;pending=false;
+            if(!alreadyBegun)initialize.run();
+        }
+        void finish() {pending=false;}
+    }
+    private static final InputLifecycle INPUTS=new InputLifecycle();
     private WorldPrograms() {}
-    public static boolean enabled() {return !failed && prepared && GreenMarineClient.enabled() && ShaderRuntime.active()!=null
+    public static boolean enabled() {return !failed && !PackRenderer.failed() && prepared && GreenMarineClient.enabled() && ShaderRuntime.active()!=null
         && !ShaderRuntime.active().definition().programs().isEmpty() && ShaderRuntime.script()!=null && !ShaderRuntime.script().failed();}
     public static long draws() {return draws;}
     public static long bindingUpdates() {return bindingUpdates;}
@@ -70,15 +86,25 @@ public final class WorldPrograms {
         if(++mainFrames>40)mainMeasurement=mainGpu.begin(RenderSystem.getDevice().createCommandEncoder());
     }
     public static void endMain() {if(mainGpu!=null)mainGpu.end(RenderSystem.getDevice().createCommandEncoder(),mainMeasurement);}
-    public static void prepare(GameRenderer renderer,Matrix4fc projection) {
+    /** Refresh current camera/environment and invalidate last frame's surfaces before rays or pack phases. */
+    public static void beginFrameInputs(GameRenderer renderer,Matrix4fc projection) {
+        INPUTS.begin(()->initializeFrameInputs(renderer,projection));
+    }
+    private static void initializeFrameInputs(GameRenderer renderer,Matrix4fc projection) {
         bindingEpoch++;earlyMaterials=false;
         prepared=false;surfaceReady=false;captureUnsupported=surfaceProgram()!=null && renderer.gameRenderState().levelRenderState.renderWireframeTerrain;RayWorld.beginSurfaceFrame();
         if(renderer.gameRenderState().shouldRenderLevel) {writeEnvironment(renderer);writeSurface(renderer,projection);}
+    }
+    public static void prepare(GameRenderer renderer,Matrix4fc projection) {
+        // Direct callers keep the old initialization guarantee. The host hook already refreshed
+        // these inputs before early phases, so normal preparation must preserve their work.
+        INPUTS.consume(()->initializeFrameInputs(renderer,projection));
         if(failed || !GreenMarineClient.enabled() || ShaderRuntime.active()==null || ShaderRuntime.active().definition().programs().isEmpty()
             || ShaderRuntime.script()==null || ShaderRuntime.script().failed() || !renderer.gameRenderState().shouldRenderLevel) return;
         try {
             var main=renderer.mainRenderTarget();if(main.width<=0 || main.height<=0 || main.getDepthTexture()==null)return;
             var client=Minecraft.getInstance();var camera=renderer.gameRenderState().levelRenderState.cameraRenderState;
+            if(ShaderRuntime.active().definition().terrain().enabled())com.koper.greenmarine.client.terrain.TerrainPack.validateHost(client);
             com.koper.greenmarine.api.external.ExternalRenderers.captureCamera(projection,camera.viewRotationMatrix,camera.pos.x,camera.pos.y,camera.pos.z,
                 RenderSystem.getDevice().getDeviceInfo().isZZeroToOne());
             var encoder=RenderSystem.getDevice().createCommandEncoder();
@@ -113,6 +139,7 @@ public final class WorldPrograms {
             SURFACE.position(0).limit(SURFACE_BYTES);encoder.writeToBuffer(surface.slice(),SURFACE);encoder.writeToBuffer(surfaceOpaque.slice(),SURFACE.rewind());ray=RayWorld.bindings(encoder);
             voxel=VoxelWorld.prepare(encoder,camera.pos.x,camera.pos.y,camera.pos.z,ShaderRuntime.rays().effective()==RayMode.VOXEL);voxelMaterials=VoxelWorld.materials(encoder);heightField=HEIGHTS.bind(encoder);pbrSpecular=PBR.specular(encoder);pbrNormal=PBR.normal(encoder);pbrPresence=PBR.presence(encoder);
             com.koper.greenmarine.api.external.ExternalRenderers.prepareMaterials();
+            MRT.prepare(ShaderRuntime.active().definition(),main,encoder,RenderSystem.getDevice().getDeviceInfo().limits().maxColorAttachments());
             prepared=true;
         } catch(RuntimeException|LinkageError error) {fail(error);}
     }
@@ -126,7 +153,19 @@ public final class WorldPrograms {
         try {DISTANT.render(renderer.mainRenderTarget(),RenderSystem.getDevice().createCommandEncoder(),ShaderRuntime.active(),frame,surface,environment,renderer.levelLightmap(),heightField);}
         catch(RuntimeException|LinkageError error) {fail(error);}
     }
-    public static void finishWorld() {prepared=false;}
+    public static void finishWorld() {MRT.publish();prepared=false;INPUTS.finish();}
+    /** Host solid pass has closed, so publication cannot expose an attachment still being written. */
+    public static void cancelTargets() {MRT.reset();prepared=false;}
+    public static void beforeDeferred() {MRT.publish();bindingEpoch++;}
+    public static void afterDeferred() {if(enabled())MRT.afterDeferred(RenderSystem.getDevice().createCommandEncoder());bindingEpoch++;}
+    public static boolean needsOpaqueBoundary() {return enabled() && MRT.active();}
+    public static com.mojang.renderpearl.api.commands.RenderPassDescriptor renderPass(com.mojang.renderpearl.api.commands.RenderPassDescriptor descriptor) {
+        if(!enabled())return descriptor;
+        try {return MRT.descriptor(descriptor,RenderSystem.getDevice().getDeviceInfo().limits().maxColorAttachments());}
+        catch(RuntimeException|LinkageError failure) {fail(failure);throw failure;}
+    }
+    /** Remember dynamic host definitions too, so ordinary draws receive disabled extra attachment writes. */
+    public static void observe(RenderPipeline pipeline) {if(!(pipeline instanceof WorldPipeline))HOST.put(pipeline.getLocation().toString(),pipeline);}
     /** Column heights for sun shadows beyond the traced scene; only while a Solstice terrain program is active. */
     public static void tickHeightField(net.minecraft.client.Minecraft client) {
         // Not enabled(): that also requires a frame in preparation, which is never true during a client tick.
@@ -134,35 +173,41 @@ public final class WorldPrograms {
     }
     public static CompiledRenderPipeline select(CompiledRenderPipeline original) {
         if(!enabled() || !(original instanceof FrontendRenderPipeline front) || OWNED.contains(original))return original;
-        var variants=captureMode?CAPTURE_VARIANTS:VARIANTS;var cached=variants.get(front.name());if(cached!=null)return cached;
+        var variants=captureMode?CAPTURE_VARIANTS:VARIANTS;var variantKey=front.name()+(MRT.pass() && !captureMode?"|mrt:"+MRT.signature():"");var cached=variants.get(variantKey);if(cached!=null)return cached;
         if(HOST.isEmpty()) {for(var pipeline:RenderPipelines.requiredPipelines())HOST.put(pipeline.getLocation().toString(),pipeline);for(var pipeline:RenderPipelines.optionalPipelines())HOST.put(pipeline.getLocation().toString(),pipeline);}
         var sodiumHost=SodiumCompatibility.find(front.name());
         var host=sodiumHost!=null?sodiumHost:HOST.get(front.name());
         if(host==null) {
             if(captureMode)throw new IllegalStateException("Unsupported terrain material capture pipeline: "+front.name());
+            if(MRT.pass())throw new IllegalStateException("Unregistered host pipeline in named world pass: "+front.name());
             return original;
         }
         boolean sodium=sodiumHost!=null;
-        var target=sodium?PackProgram.Target.TERRAIN:target(host);if(target==null)return original;
+        var target=sodium?PackProgram.Target.TERRAIN:target(host);if(target==null && !MRT.pass())return original;
         if(captureMode && target!=PackProgram.Target.TERRAIN) throw new IllegalStateException("Non-terrain draw in surface replay");
-        var program=ShaderRuntime.active().definition().programs().stream().filter(p->p.target()==target).findFirst().orElse(null);
-        if(program==null)return original;
-        if(sodium && !SodiumCompatibility.supports(program)) {
+        var program=ShaderRuntime.active().definition().worldProgram(target,front.name());
+        if(program==null && !MRT.pass())return original;
+        if(sodium && program!=null && !SodiumCompatibility.supports(program)) {
             if(captureMode)throw new IllegalStateException("Unsupported Sodium terrain pack program: "+program.fragment());
             return original;
         }
         try {
-            return variants.computeIfAbsent(front.name(),key->{
+            return variants.computeIfAbsent(variantKey,key->{
                 var location=Identifier.fromNamespaceAndPath("greenmarine",(captureMode?"surface/":"world/")+Integer.toUnsignedString(key.hashCode()));
                 var compatibleHost=sodium?SodiumCompatibility.prepare(host):host;
-                var definition=captureMode?WorldPipeline.capture(compatibleHost,program,location):WorldPipeline.decorate(compatibleHost,program,location);
-                try(var source=new WorldShaders(ShaderRuntime.active(),sodium)) {
+                boolean terrainAttributes=ShaderRuntime.active().definition().terrain().enabled() && program!=null && program.target()==PackProgram.Target.TERRAIN;
+                var definition=program==null?compatibleHost:captureMode?WorldPipeline.capture(compatibleHost,program,location):WorldPipeline.decorate(compatibleHost,program,location,terrainAttributes);
+                var mapping=MRT.pass() && !captureMode?MRT.mapping(program,compatibleHost.getColorTargetStates().size()):Map.<Integer,Integer>of();
+                if(MRT.pass() && !captureMode)definition=WorldPipeline.attachments(definition,location,MRT.formats(),mapping);
+                if(terrainAttributes)RasterStorage.declare(location.toString(),Map.of("MarineTerrainVertices",RasterStorage.Kind.BUFFER,"MarineTerrainDraws",RasterStorage.Kind.BUFFER));
+                try(var source=new WorldShaders(ShaderRuntime.active(),sodium,program,mapping,definition)) {
+                    if(source.graphicsProgram()!=null)GraphicsStageFeatures.require(ComputeBackend.vulkan(RenderSystem.getDevice()),source.graphicsProgram());
                     var compiled=RenderSystem.getDevice().compilePipeline(definition,source,Runnable::run).join().finishCompile();
                     if(compiled==null)throw new IllegalArgumentException("Unable to compile world program: "+key);
-                    OWNED.add(compiled);return compiled;
+                    OWNED.add(compiled);if(program!=null)BINDINGS.put(compiled,program);return compiled;
                 }
             });
-        } catch(RuntimeException|LinkageError error) {fail(error);return original;}
+        } catch(RuntimeException|LinkageError error) {boolean named=MRT.pass();fail(error);if(named)throw error;return original;}
     }
     public static PackProgram.Target target(RenderPipeline pipeline) {
         var shader=pipeline.getShaders().get(ShaderType.FRAGMENT);if(shader==null || !shader.getNamespace().equals("minecraft"))return null;
@@ -178,14 +223,14 @@ public final class WorldPrograms {
         return null;
     }
     public static void bind(RenderPass pass,CompiledRenderPipeline pipeline,WorldBindingCache cache) {
-        if(!enabled() || !OWNED.contains(pipeline)) {cache.invalidate();return;}
+        if(!enabled() || !BINDINGS.containsKey(pipeline)) {cache.invalidate();return;}
         int flags=(captureMode?1:0)|(captureWater?2:0)|(surfaceReady?4:0);
         if(cache.matches(pipeline,bindingEpoch,flags)) {bindingSkips++;return;}
         bind(pass,pipeline);
         cache.commit(pipeline,bindingEpoch,flags);
     }
     public static void bind(RenderPass pass,CompiledRenderPipeline pipeline) {
-        if(!enabled() || !OWNED.contains(pipeline))return;
+        if(!enabled() || !BINDINGS.containsKey(pipeline))return;
         bindingUpdates++;
         pass.setUniform("MarineFrame",frame);pass.setUniform("MarineSurfaceFrame",captureMode && !captureWater?surfaceOpaque:surface);
         pass.setUniform("MarineEnvironment",environment);pass.setUniform("RaySurfaceFrame",surfaceRay);pass.setUniform("RayFrame",ray);pass.setUniform("VoxelFrame",voxel);
@@ -196,8 +241,15 @@ public final class WorldPrograms {
         pass.setUniform("MarineSurfaceNormalDepth",!captureMode && surfaceReady?MATERIALS.normal():RayWorld.normals(),nearest);
         pass.setUniform("MarineSurfaceAlbedo",!captureMode && surfaceReady?MATERIALS.albedo():RayWorld.albedo(),nearest);
         pass.setUniform("RaySurfaceLighting",RayWorld.surfaceLighting(),linear);pass.setUniform("RayReflection",RayWorld.reflections(),linear);pass.setUniform("RaySurfaceExtra",RayWorld.surfaceExtra(),linear);
+        var program=BINDINGS.get(pipeline);
+        for(var input:program.inputs().entrySet()) {
+            var texture=PackRenderer.worldInput(input.getValue());
+            boolean integer=switch(texture.texture().getFormat().componentType()) {case UINT_8,SINT_8,UINT_16,SINT_16,UINT_32,SINT_32->true;default->false;};
+            pass.setUniform(input.getKey(),texture,integer || PackDepthSource.named(input.getValue())!=null?nearest:linear);
+        }
+        program.uniforms().forEach((binding,resource)->pass.setUniform(binding,PackRenderer.worldUniform(resource)));
     }
-    public static void drawn(CompiledRenderPipeline pipeline) {if(!captureMode && enabled() && OWNED.contains(pipeline)) {draws++;pendingDraw=true;}}
+    public static void drawn(CompiledRenderPipeline pipeline) {if(!captureMode && enabled() && BINDINGS.containsKey(pipeline)) {draws++;pendingDraw=true;}}
     public static void submitted() {
         if(!pendingDraw)return;pendingDraw=false;ShaderRuntime.submittedWorld();
         if(!logged){logged=true;GreenMarine.LOGGER.info("World shader programs submitted: pack={}, backend={}, variants={}",ShaderRuntime.active().definition().id(),ShaderRuntime.capabilities().backend(),VARIANTS.size());}
@@ -329,9 +381,9 @@ public final class WorldPrograms {
         ENVIRONMENT.putFloat(112,GreenMarineClient.seconds(state.worldPartialTicks)).putFloat(116,java.lang.Math.floorMod(time,24000)/24000f)
             .putFloat(120,draws).putFloat(124,client.isPaused()?1:0);
     }
-    private static void fail(Throwable error) {failed=true;prepared=false;pendingDraw=false;ShaderRuntime.renderFailure(error);GreenMarine.LOGGER.error("World shader programs disabled until pack switch/reload",error);}
+    private static void fail(Throwable error) {failed=true;prepared=false;pendingDraw=false;MRT.reset();ShaderRuntime.renderFailure(error);GreenMarine.LOGGER.error("World shader programs disabled until pack switch/reload",error);}
     public static void reset() {
-        bindingEpoch++;bindingUpdates=bindingSkips=0;
+        MRT.reset();BINDINGS.clear();INPUTS.finish();bindingEpoch++;bindingUpdates=bindingSkips=0;
         BACKGROUND.close();DISTANT.close();HEIGHTS.close();HEIGHTS.reset();PBR.close();
         prepared=failed=pendingDraw=logged=captureMode=captureWater=surfaceReady=captureUnsupported=false;WEATHER.reset();if(mainGpu!=null)mainGpu.close();mainGpu=null;mainFrames=0;mainMeasurement=-1;VARIANTS.values().forEach(CompiledRenderPipeline::close);VARIANTS.clear();CAPTURE_VARIANTS.values().forEach(CompiledRenderPipeline::close);CAPTURE_VARIANTS.clear();OWNED.clear();OPAQUE.close();MATERIALS.close();
         if(frame!=null)frame.close();if(surface!=null)surface.close();if(surfaceOpaque!=null)surfaceOpaque.close();if(environment!=null)environment.close();if(materialProfiles!=null)materialProfiles.close();if(materialExtension!=null)materialExtension.close();materialProfiles=materialExtension=null;frame=surface=surfaceOpaque=environment=ray=voxel=surfaceRay=null;voxelMaterials=heightField=pbrSpecular=pbrNormal=pbrPresence=null;draws=captures=0;COPY_CPU.clear();

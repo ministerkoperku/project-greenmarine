@@ -4,6 +4,7 @@
 #include <greenmarine:surface_rays.glsl>
 #include <greenmarine:rays.glsl>
 #include <greenmarine:history.glsl>
+#include <greenmarine:texture_history.glsl>
 uniform sampler2D ColorSampler;
 uniform sampler2D SolsticeScene;
 uniform sampler2D DepthSampler;
@@ -32,9 +33,11 @@ void main() {
                 float expected=Context.x>.5?projected.z:projected.z*.5+.5;
                 bool consistent=dot(current.xyz,previous.xyz)>.93 && abs(previous.w-expected)<max(.00001,abs(expected)*.012);
                 vec4 previousMaterial=texture(HistoryAlbedoMaterial,uv);
-                vec3 albedoDelta=abs(material.rgb-previousMaterial.rgb);
                 consistent=consistent && abs(texture(HistorySceneDepth,uv).r-previous.w)<max(.000002,abs(previous.w)*.002)
-                    && max(albedoDelta.r,max(albedoDelta.g,albedoDelta.b))<.035 && abs(material.a-previousMaterial.a)<.015;
+                    && marineHistoryChannelMatches(material.r,previousMaterial.r)
+                    && marineHistoryChannelMatches(material.g,previousMaterial.g)
+                    && marineHistoryChannelMatches(material.b,previousMaterial.b)
+                    && abs(material.a-previousMaterial.a)<.015;
                 if(consistent) {
                     // Match the validated nearest surface texel at entity/material boundaries.
                     vec3 old=texelFetch(HistorySampler,ivec2(uv*vec2(textureSize(HistorySampler,0))),0).rgb;

@@ -60,7 +60,7 @@ class PlayerReflectionKAvatarTest {
                 var cube=((List<?>)first.getClass().getField("cubes").get(first)).getFirst();
                 float[] raw=(float[])cube.getClass().getField("origin").get(cube);
                 var world=new Matrix4f().translation(2,3,4).scale(1f/16).mul(new Matrix4f().set(matrices,0)).transformPosition(new Vector3f(raw));
-                var recovered=new Matrix4f().set(16,result.geometry().data()).transformPosition(world);
+                var recovered=ActorPayloadTestData.matrix(result.geometry().data(),16).transformPosition(world);
                 assertEquals(raw[0],recovered.x,1e-4);assertEquals(raw[1],recovered.y,1e-4);assertEquals(raw[2],recovered.z,1e-4);
             }
         }
@@ -82,7 +82,7 @@ class PlayerReflectionKAvatarTest {
             var result=PlayerReflectionKAvatar.captureModel(model,matrices,new Matrix4f().scale(1f/16));assertNull(result.error());
             var data=result.geometry().data();assertEquals(result.geometry().count()*24*9,baked.length);
             for(int box=0;box<result.geometry().count();box++) {
-                var inverse=new Matrix4f().set(16+box*288,data);
+                var inverse=ActorPayloadTestData.matrix(data,16+box*288);
                 for(int vertex=0;vertex<24;vertex++) {
                     int base=(box*24+vertex)*9;
                     int bone=(int)baked[base+8];
@@ -97,8 +97,8 @@ class PlayerReflectionKAvatarTest {
                         assertTrue(coordinate<=data.getFloat(16+box*288+80+axis*4)+1e-4);
                     }
                     var point=new Vector4f(raw,1);
-                    assertEquals(baked[base+3],new Vector4f().set(16+box*288+96+face*16,data).dot(point),1e-4);
-                    assertEquals(baked[base+4],new Vector4f().set(16+box*288+192+face*16,data).dot(point),1e-4);
+                    assertEquals(baked[base+3],ActorPayloadTestData.vector(data,16+box*288+96+face*16).dot(point),1e-4);
+                    assertEquals(baked[base+4],ActorPayloadTestData.vector(data,16+box*288+192+face*16).dot(point),1e-4);
                 }
             }
             }

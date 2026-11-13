@@ -101,6 +101,7 @@ public final class GreenMarineClient implements ClientModInitializer {
     public static void close() {
         com.koper.greenmarine.api.render.MarineRenderer.reset();
         ShaderRuntime.reset();
+        com.koper.greenmarine.client.terrain.TerrainSidecars.collectRetired();
         GreenPostEffect.close();
         if (engine != null) { engine.close(); engine = null; }
     }

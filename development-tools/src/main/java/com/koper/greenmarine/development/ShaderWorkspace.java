@@ -11,7 +11,7 @@ import java.util.function.Function;
 /** Editable directory packs confined to the caller's shaderpacks/greenmarine directory. */
 public final class ShaderWorkspace {
     public static final int MAX_SOURCE_BYTES = 256 * 1024;
-    private static final Set<String> EXTENSIONS = Set.of("fsh", "vsh", "glsl", "slang", "comp", "csh", "json", "lua", "md", "txt", "properties");
+    private static final Set<String> EXTENSIONS = Set.of("fsh", "vsh", "gsh", "tcs", "tes", "glsl", "slang", "comp", "csh", "json", "lua", "md", "txt", "properties");
     private final Path root;
     public ShaderWorkspace(Path root) { this.root = Objects.requireNonNull(root).toAbsolutePath().normalize(); }
 

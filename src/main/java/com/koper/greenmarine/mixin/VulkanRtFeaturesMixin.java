@@ -15,6 +15,7 @@ public abstract class VulkanRtFeaturesMixin {
     private static void greenmarine$optionalRt(CallbackInfoReturnable<Set<FeatureSet>> ci) {
         var features=new HashSet<>(ci.getReturnValue());
         features.addAll(com.koper.greenmarine.client.StorageFeatures.OPTIONAL);
+        features.addAll(com.koper.greenmarine.client.GraphicsStageFeatures.OPTIONAL);
         if(!Boolean.getBoolean("greenmarine.native.disable")) features.add(RtFeatures.OPTIONAL);
         ci.setReturnValue(Set.copyOf(features));
     }

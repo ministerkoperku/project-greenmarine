@@ -152,6 +152,8 @@ public final class TorchShadowProbe {
     }
     static void finish(Minecraft client,Path output,String status) {
         if(stage==99)return;stage=99;
+        try {Files.writeString(output.resolve("actor-memory.json"),new com.google.gson.Gson().toJson(com.koper.greenmarine.client.rt.PlayerReflection.memoryStats()));}
+        catch(Exception error) {GreenMarine.LOGGER.warn("Could not save actor memory statistics",error);}
         if(sceneOnlyRegistration!=null)try {sceneOnlyRegistration.close();sceneOnlyRegistration=null;}catch(Exception ignored){}
         if(saved!=null)ShaderRuntime.apply(saved);
         try {Files.writeString(output.resolve("torch-result.txt"),status+"\n");}catch(Exception ignored){}

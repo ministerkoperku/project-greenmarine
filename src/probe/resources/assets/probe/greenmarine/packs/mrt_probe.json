@@ -1,0 +1,236 @@
+{
+  "schema": 1,
+  "id": "probe:mrt",
+  "name": "MRT acceptance fixture",
+  "targets": {
+    "Radiance": {
+      "format": "rgba32f",
+      "size": [
+        8,
+        8
+      ],
+      "clear": [
+        0.25,
+        0,
+        0,
+        1
+      ]
+    },
+    "Material": {
+      "format": "r32ui",
+      "size": [
+        8,
+        8
+      ],
+      "clear": [
+        4294967293,
+        0,
+        0,
+        0
+      ]
+    },
+    "FrameClear": {
+      "format": "r32f",
+      "size": [
+        8,
+        8
+      ],
+      "clear": [
+        7,
+        0,
+        0,
+        0
+      ],
+      "clearEachFrame": true
+    }
+  },
+  "passes": [
+    {
+      "name": "check_uniforms",
+      "compute": "probe:core/mrt_uniform_check",
+      "groups": [
+        1,
+        1,
+        1
+      ],
+      "uniforms": {
+        "IrisUniforms": "SceneInputs"
+      },
+      "requires": "compute",
+      "stage": "compute"
+    },
+    {
+      "name": "first",
+      "fragment": "probe:core/mrt_accumulate",
+      "outputs": {
+        "0": "Radiance",
+        "1": "Material",
+        "2": "FrameClear"
+      },
+      "inputs": {
+        "PreviousRadiance": "Radiance",
+        "PreviousMaterial": "Material",
+        "PreviousFrameClear": "FrameClear"
+      },
+      "uniforms": {
+        "IrisUniforms": "SceneInputs"
+      }
+    },
+    {
+      "name": "second",
+      "fragment": "probe:core/mrt_accumulate",
+      "outputs": {
+        "0": "Radiance",
+        "1": "Material",
+        "2": "FrameClear"
+      },
+      "inputs": {
+        "PreviousRadiance": "Radiance",
+        "PreviousMaterial": "Material",
+        "PreviousFrameClear": "FrameClear"
+      },
+      "uniforms": {
+        "IrisUniforms": "SceneInputs"
+      }
+    },
+    {
+      "name": "third",
+      "fragment": "probe:core/mrt_accumulate",
+      "outputs": {
+        "0": "Radiance",
+        "1": "Material",
+        "2": "FrameClear"
+      },
+      "inputs": {
+        "PreviousRadiance": "Radiance",
+        "PreviousMaterial": "Material",
+        "PreviousFrameClear": "FrameClear"
+      },
+      "uniforms": {
+        "IrisUniforms": "SceneInputs"
+      }
+    },
+    {
+      "name": "present",
+      "fragment": "probe:core/mrt_present",
+      "inputs": {
+        "Latest": "Radiance",
+        "Earliest": "first",
+        "MaterialData": "Material",
+        "ClearedData": "FrameClear"
+      },
+      "uniforms": {
+        "IrisUniforms": "SceneInputs"
+      }
+    }
+  ],
+  "resources": {
+    "uniforms": {
+      "SceneInputs": [
+        {
+          "name": "width",
+          "type": "float",
+          "source": "computedWidth"
+        },
+        {
+          "name": "height",
+          "type": "float",
+          "source": "computedHeight"
+        },
+        {
+          "name": "counter",
+          "type": "int",
+          "source": "computedCounter"
+        },
+        {
+          "name": "day",
+          "type": "int",
+          "source": "worldDay"
+        },
+        {
+          "name": "projection",
+          "type": "mat4",
+          "source": "gbufferProjection"
+        },
+        {
+          "name": "inverseProjection",
+          "type": "mat4",
+          "source": "gbufferProjectionInverse"
+        },
+        {
+          "name": "sun",
+          "type": "vec3",
+          "source": "computedSun"
+        },
+        {
+          "name": "altitude",
+          "type": "float",
+          "source": "computedAltitude"
+        },
+        {
+          "name": "brightness",
+          "type": "int",
+          "source": "eyeBrightness",
+          "arrayLength": 2
+        }
+      ]
+    },
+    "buffers": {
+      "UniformCheck": {
+        "size": 16
+      }
+    }
+  },
+  "uniformInputs": {
+    "constants": {
+      "WIDTH_SCALE": 3,
+      "HEIGHT_BIAS": 0,
+      "ALTITUDE_BIAS": 0
+    },
+    "sunPathRotation": -35,
+    "expressions": [
+      {
+        "kind": "variable",
+        "type": "float",
+        "name": "widthScaled",
+        "expression": "viewWidth * WIDTH_SCALE"
+      },
+      {
+        "kind": "uniform",
+        "type": "float",
+        "name": "computedWidth",
+        "expression": "widthScaled / WIDTH_SCALE"
+      },
+      {
+        "kind": "uniform",
+        "type": "float",
+        "name": "computedHeight",
+        "expression": "viewHeight + HEIGHT_BIAS"
+      },
+      {
+        "kind": "uniform",
+        "type": "int",
+        "name": "computedCounter",
+        "expression": "frameCounter"
+      },
+      {
+        "kind": "uniform",
+        "type": "vec3",
+        "name": "computedSun",
+        "expression": "vec3(sunPosition.x, sunPosition.y, sunPosition.z)"
+      },
+      {
+        "kind": "uniform",
+        "type": "float",
+        "name": "computedAltitude",
+        "expression": "eyeAltitude + ALTITUDE_BIAS"
+      },
+      {
+        "kind": "uniform",
+        "type": "float",
+        "name": "unusedOptionalDh",
+        "expression": "dhFarPlane"
+      }
+    ]
+  }
+}

@@ -9,7 +9,7 @@
   "mixins": ["greenmarine.mixins.json"],
   "entrypoints": {
     "main": ["com.koper.greenmarine.GreenMarine"],
-    "client": ["com.koper.greenmarine.client.GreenMarineClient"]
+    "client": ["com.koper.greenmarine.client.GreenMarineClient", "com.koper.greenmarine.compat.integration.MechanicsMicroGeometry"]
   },
   "depends": {
     "fabricloader": ">=0.19.5",

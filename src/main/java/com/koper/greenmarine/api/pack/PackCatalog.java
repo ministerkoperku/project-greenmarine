@@ -8,6 +8,7 @@ import java.util.*;
 import java.util.function.Function;
 
 public final class PackCatalog {
+    private static final int MAX_INCLUDES = 512;
     private static final java.util.regex.Pattern INCLUDE = java.util.regex.Pattern.compile("(?m)^\\s*#include\\s*[<\"]([^>\"]+)[>\"]");
     public record LoadedPack(ShaderPack definition, String script, Map<String, String> sources,Map<String,ShaderBinary> binaries,List<MaterialAddons.Source> materialAddons) {
         public LoadedPack { sources = Map.copyOf(sources); binaries=Map.copyOf(binaries); materialAddons=List.copyOf(materialAddons); }
@@ -49,6 +50,7 @@ public final class PackCatalog {
                         continue;
                     }
                     shaders.put(pass.fragment(), require(resources, shaderResource(pass.fragment()), 262_144));
+                    if(pass.vertex()!=null)shaders.put("vertex|"+pass.vertex(),require(resources,shaderResource(pass.vertex()).replaceFirst("\\.fsh$",".vsh"),262_144));
                     if (pass.fallback() != null) shaders.put(pass.fallback(), require(resources, shaderResource(pass.fallback()), 262_144));
                     if(pass.spirv()!=null) {
                         var binary=new ShaderBinary(binaryResources.apply(pass.spirv()));
@@ -60,8 +62,12 @@ public final class PackCatalog {
                     if(program.surface()!=null) shaders.put(program.surface(),require(resources,shaderResource(program.surface()),262_144));
                     if(program.vertex()!=null) shaders.put("vertex|"+program.vertex(),require(resources,
                         shaderResource(program.vertex()).replaceFirst("\\.fsh$",".vsh"),262_144));
+                    program.stages().forEach((stage,id)->shaders.put(stageKey(stage,id),require(resources,stageResource(stage,id),262_144)));
                 }
-                for(String shader:new ArrayList<>(shaders.values())) loadIncludes(shader,shaders,resources,new HashSet<>(),0);
+                // Declared root stages have their own schema limits; count only distinct includes here.
+                var includes=new LinkedHashMap<String,String>();
+                for(String shader:shaders.values()) loadIncludes(shader,includes,resources,new HashSet<>(),0);
+                shaders.putAll(includes);
                 String script = pack.script() == null ? "function update(frame) end" : require(resources, pack.script(), 65_536);
                 try (var validation = new PackScript(pack, script, new LightRegistry())) { /* Validate compilation and initialization before publishing. */ }
                 if (staging.putIfAbsent(pack.id(), new LoadedPack(pack, script, shaders,binaries,materialAddons(input,pack,resources))) != null) {
@@ -99,13 +105,14 @@ public final class PackCatalog {
     }
 
     private static void loadIncludes(String text,Map<String,String> sources,Function<String,String> resources,Set<String> visiting,int depth) {
-        if(depth>16 || sources.size()>80) throw new IllegalArgumentException("Shader include limit exceeded");
+        if(depth>16) throw new IllegalArgumentException("Shader include limit exceeded");
         var matcher=INCLUDE.matcher(text);
         while(matcher.find()) {
             String id=matcher.group(1); ShaderPack.requireId(id);
             if(!visiting.add(id)) throw new IllegalArgumentException("Cyclic shader include: "+id);
             String key="include|"+id;
             if(!sources.containsKey(key)) {
+                if(sources.size()>=MAX_INCLUDES) throw new IllegalArgumentException("Shader include limit exceeded");
                 int colon=id.indexOf(':');
                 String included=require(resources,id.substring(0,colon+1)+"shaders/include/"+id.substring(colon+1),262_144);
                 sources.put(key,included); loadIncludes(included,sources,resources,visiting,depth+1);
@@ -120,11 +127,17 @@ public final class PackCatalog {
         for(var pass:pack.definition().passes()) {
             if(pass.stage()==PackPass.Stage.COMPUTE) { if(!pack.sources().containsKey("compute|"+pass.fragment())) throw new IllegalArgumentException("Registered pack compute source is missing"); continue; }
             if(!pack.sources().containsKey(pass.fragment()) || (pass.fallback()!=null && !pack.sources().containsKey(pass.fallback()))) throw new IllegalArgumentException("Registered pack shader source is missing");
+            if(pass.vertex()!=null && !pack.sources().containsKey("vertex|"+pass.vertex()))throw new IllegalArgumentException("Registered scene vertex source is missing");
         }
-        for(var program:pack.definition().programs()) if(!pack.sources().containsKey(program.fragment())
+        for(var program:pack.definition().programs()) {
+            if(!pack.sources().containsKey(program.fragment())
             || (program.surface()!=null && !pack.sources().containsKey(program.surface()))
             || (program.vertex()!=null && !pack.sources().containsKey("vertex|"+program.vertex())))
             throw new IllegalArgumentException("Registered world program source is missing");
+            program.stages().forEach((stage,id)->{
+                if(!pack.sources().containsKey(stageKey(stage,id)))throw new IllegalArgumentException("Registered intermediate world source is missing: "+stage+" "+id);
+            });
+        }
         try(var validation=new PackScript(pack.definition(),pack.script(),new LightRegistry())) { /* Validate the owned script before registration. */ }
         registered.put(pack.definition().id(),pack); generation++;
         return () -> { synchronized(PackCatalog.this) { if(registered.remove(pack.definition().id(),pack)) generation++; } };
@@ -143,6 +156,14 @@ public final class PackCatalog {
     }
     /** Compute programs use Iris' extension: {@code assets/<ns>/shaders/<path>.csh}. */
     public static String computeResource(String shader) { return shaderResource(shader).replaceFirst("\\.fsh$", ".csh"); }
+    public static String stageKey(com.koper.greenmarine.api.render.GraphicsStage stage,String id) {
+        if(!stage.intermediate())throw new IllegalArgumentException("Expected an intermediate world stage");
+        return stage.name().toLowerCase(Locale.ROOT)+"|"+id;
+    }
+    public static String stageResource(com.koper.greenmarine.api.render.GraphicsStage stage,String id) {
+        String extension=switch(stage){case GEOMETRY->".gsh";case TESS_CONTROL->".tcs";case TESS_EVALUATION->".tes";default->throw new IllegalArgumentException("Expected an intermediate world stage");};
+        return shaderResource(id).replaceFirst("\\.fsh$",extension);
+    }
     private static void requireId(String id) { ShaderPack.requireId(id); }
     public synchronized Optional<LoadedPack> get(String id) { return Optional.ofNullable(registered.containsKey(id)?registered.get(id):snapshot.get(id)); }
     public synchronized List<LoadedPack> packs() { var all=new LinkedHashMap<>(snapshot); all.putAll(registered); return List.copyOf(all.values()); }

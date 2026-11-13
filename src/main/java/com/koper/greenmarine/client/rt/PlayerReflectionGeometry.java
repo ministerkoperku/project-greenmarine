@@ -19,13 +19,19 @@ final class PlayerReflectionGeometry {
         Builder() {this(MAX_BOXES);}
         Builder(int capacity) {
             if(capacity!=MAX_BOXES && capacity!=EXTENDED_MAX_BOXES)throw new IllegalArgumentException("Unsupported actor capacity");
-            this.capacity=capacity;buffer=ByteBuffer.allocateDirect(16+capacity*BOX_BYTES).order(ByteOrder.nativeOrder());
+            this.capacity=capacity;buffer=ByteBuffer.allocate(16+capacity*BOX_BYTES).order(ByteOrder.nativeOrder());
         }
         /** Continues an existing payload (e.g. a KAvatar body) so further actors can follow it. */
         Builder(ByteBuffer existing,int boxes,int capacity) {
             this(capacity);
+            copyFrom(existing,boxes);
+        }
+        Builder reset() {rollback(0);return this;}
+        Builder copyFrom(ByteBuffer existing,int boxes) {
             if(boxes<0 || boxes>capacity || existing.remaining()<16+boxes*BOX_BYTES)throw new IllegalArgumentException("Invalid actor payload");
+            reset();
             buffer.put(0,existing.duplicate().limit(existing.position()+16+boxes*BOX_BYTES),0,16+boxes*BOX_BYTES);count=boxes;
+            return this;
         }
         int count() {return count;}
         int remaining() {return capacity-count;}
@@ -73,7 +79,9 @@ final class PlayerReflectionGeometry {
                 if(us[face]==null || vs[face]==null) return false;
             }
             int offset=16+count*BOX_BYTES;
-            inverse.get(offset,buffer);
+            // JOML's Unsafe ByteBuffer writer assumes direct storage; staging is deliberately heap-owned.
+            for(int column=0;column<4;column++)for(int row=0;row<4;row++)
+                buffer.putFloat(offset+(column*4+row)*4,inverse.get(column,row));
             for(int axis=0;axis<3;axis++) {buffer.putFloat(offset+64+axis*4,lower[axis]);buffer.putFloat(offset+80+axis*4,upper[axis]);}
             for(int face=0;face<6;face++) for(int component=0;component<4;component++) {
                 buffer.putFloat(offset+96+face*16+component*4,us[face][component]);
@@ -118,7 +126,10 @@ final class PlayerReflectionGeometry {
         } finally {if(!committed)builder.rollback(prior);}
     }
     static Builder capture(ModelPart root,PoseStack pose) {
-        var builder=new Builder();
+        return capture(root,pose,new Builder());
+    }
+    static Builder capture(ModelPart root,PoseStack pose,Builder builder) {
+        builder.reset();
         root.visit(pose,(partPose,path,index,cube)->{if(visible(root,path))builder.add(cube,partPose.pose());});
         return builder;
     }

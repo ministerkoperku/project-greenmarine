@@ -27,6 +27,26 @@ valid snapshot. Java mods can register `PackCatalog.LoadedPack` through
 use `vertex|<id>` keys; fragment keys retain their original names. `ShaderProgram.fromPack`
 and `ProgramSources` support stage-aware lookup even when the two stages share an id.
 
+Ordinary world programs may also declare `geometry`, `tessControl` and
+`tessEvaluation` resource identifiers. They resolve to `.gsh`, `.tcs` and `.tes`
+files alongside the endpoint shaders. Tessellation requires both declarations
+and an integral `patchVertices` from 1 through 32, specifying the input patch size
+independently of the control shader's output size. An explicit vertex program is
+required. For example:
+
+```json
+{"target":"terrain","vertex":"example:terrain","fragment":"example:terrain",
+ "tessControl":"example:terrain","tessEvaluation":"example:terrain",
+ "geometry":"example:terrain","patchVertices":3}
+```
+
+These stages use the existing [Vulkan graphics-stage path](GRAPHICS-STAGES.md),
+including actual host feature/limit checks, descriptor visibility and uniform ABI
+validation for intermediate-only blocks. Their sources and includes are captured
+transactionally with the pack. Registered snapshots use `geometry|<id>`,
+`tess_control|<id>` and `tess_evaluation|<id>` keys. Surface replay and background
+programs reject these declarations. OpenGL execution is unsupported.
+
 ## Host interface and pipeline state
 
 Targets are `terrain`, `block`, `entity`, `sky`, `clouds`, `weather`, `particles`.
@@ -51,6 +71,49 @@ Water displacement and alpha must agree in the alpha/depth-bounds and accumulati
 phases. Seabreeze retains Minecraft's OIT and fog include functions for those phases.
 The current host uses reversed depth: zero is the far/sky clear. Avoid reconstructing
 that sentinel into an infinite world position.
+
+## Named world attachments
+
+World programs can write full-resolution [named targets](SCENE-TARGETS.md) with
+`"outputs":{"0":"Radiance","1":"Material"}`. Fragment GLSL must declare exactly
+those consecutive locations explicitly; GreenMarine routes them to the shared
+world attachment layout. Floating-point and unsigned integer targets may be mixed.
+Targets retain values across frames unless `clearEachFrame:true` is declared.
+
+`"inputs":{"PreviousRadiance":"Radiance"}` samples the preceding published target
+version, including when that target is also an output. `uniforms` maps shader block
+names to declared [pack uniform resources](PACK-UNIFORMS.md). World draws and scene
+passes share one immutable frame snapshot and uniform upload; the 288-byte
+`MarineFrame` ABI remains unchanged. Named world bindings cannot currently be
+combined with a surface replay program on the same declaration.
+
+By default, borrowed host colour attachments remain at their original slots and
+named targets append after them. Draws that do not declare a named output cannot
+write that target. Actual pass formats, host depth state and each ordinary host
+attachment's blend/write state are preserved. OIT accumulation attachments are
+always retained; exceeding the physical device's colour attachment limit fails
+explicitly before creating an incompatible pass.
+
+An optional root `"worldColor":"Radiance"` replaces the single main colour
+attachment with an owned floating-point target. It keeps the actual host depth;
+it does not replace OIT accumulation attachments. This permits eight named
+attachments on an eight-attachment host for ordinary main passes. It requires an
+active `composite` or `final` scene pass to present the result. Without that opt-in,
+the host colour remains present and consumes one attachment slot. The separate
+`background` program is currently rejected when named world attachments are used;
+use the ordinary `sky` family for that combination.
+
+Opaque targets publish after the host opaque pass closes and before `deferred`.
+After deferred passes, the next world write versions copy their latest published
+contents. Translucent results publish before `composite`/`final`; repeated cleanup
+does not flip versions twice. Pack, world, viewport and reload lifecycle changes
+retire only GreenMarine-owned target pairs.
+
+To replace one host pipeline within a family, add exact namespaced `pipelines`
+selectors, for example `"pipelines":["minecraft:pipeline/solid_terrain"]`. A matching exact
+selector wins over that family's selector-free fallback. Overlapping selectors
+and duplicate family fallbacks are rejected. Selectors still require the stated
+family and its host shader interface.
 
 ## Automatic world inputs
 

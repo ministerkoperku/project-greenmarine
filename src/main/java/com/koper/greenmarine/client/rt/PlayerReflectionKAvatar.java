@@ -24,6 +24,10 @@ final class PlayerReflectionKAvatar {
     private record Box(int bone,ModelPart.Cube cube,Matrix4f rotation) {}
     private record Prepared(int bones,List<Box> boxes,String error) {}
     private static final Map<Object,Prepared> PREPARED=new WeakHashMap<>();
+    private static final PlayerReflectionGeometry.Builder PART16=new PlayerReflectionGeometry.Builder(),
+        PART64=new PlayerReflectionGeometry.Builder(64),BASE=new PlayerReflectionGeometry.Builder();
+    private static final ByteBuffer COMBINED16=ByteBuffer.allocate(PlayerReflectionGeometry.BYTES).order(ByteOrder.nativeOrder()),
+        COMBINED64=ByteBuffer.allocate(PlayerReflectionGeometry.EXTENDED_BYTES).order(ByteOrder.nativeOrder());
     private static final ClassValue<Map<String,Field>> FIELDS=new ClassValue<>() {
         @Override protected Map<String,Field> computeValue(Class<?> type) {
             var fields=new HashMap<String,Field>();for(var field:type.getFields())fields.put(field.getName(),field);return Map.copyOf(fields);
@@ -52,6 +56,9 @@ final class PlayerReflectionKAvatar {
     /** Atomic part conversion: a malformed or oversized part publishes zero boxes. */
     static ModelCapture captureModel(Object model,float[] matrices,Matrix4fc rawToWorld) {return captureModel(model,matrices,rawToWorld,16);}
     static ModelCapture captureModel(Object model,float[] matrices,Matrix4fc rawToWorld,int capacity) {
+        return captureModel(model,matrices,rawToWorld,capacity,null);
+    }
+    private static ModelCapture captureModel(Object model,float[] matrices,Matrix4fc rawToWorld,int capacity,PlayerReflectionGeometry.Builder reused) {
         try {
             var prepared=PREPARED.get(model);
             if(prepared==null) {prepared=prepare(model);PREPARED.put(model,prepared);}
@@ -59,7 +66,7 @@ final class PlayerReflectionKAvatar {
             if(prepared.boxes().size()>capacity)return invalid("KAvatar part has "+prepared.boxes().size()+" visible cubes; limit "+capacity+" (part omitted in full)");
             if(matrices==null || matrices.length!=prepared.bones()*16 || !rawToWorld.isFinite())return invalid("Invalid KAvatar pose matrix count or root");
             for(float value:matrices)if(!Float.isFinite(value))return invalid("Nonfinite KAvatar pose");
-            var builder=new PlayerReflectionGeometry.Builder(capacity);
+            var builder=reused==null?new PlayerReflectionGeometry.Builder(capacity):reused.reset();
             for(var box:prepared.boxes()) {
                 // Builder consumes ModelPart coordinates divided by16; cancel that extra scale.
                 var pose=new Matrix4f(rawToWorld).mul(new Matrix4f().set(matrices,box.bone()*16)).mul(box.rotation()).scale(16);
@@ -190,8 +197,14 @@ final class PlayerReflectionKAvatar {
                 if(Objects.equals(bodyDefinition,definition))chosen=(boolean)call(definition,"usesPlayerSkin")?playerSkin:(Identifier)field(part,"texture");
             }
             if(chosen==null)return unavailable("KAvatar selected body texture is unavailable");
-            var captures=new ArrayList<ModelCapture>();var textures=new ArrayList<TextureSpan>();int count=0,omitted=0;var reasons=new LinkedHashSet<String>();
-            if(!replaces) {var base=PlayerReflectionGeometry.capture(body.root(),root);captures.add(new ModelCapture(base,null));count=base.count();textures.add(new TextureSpan(playerSkin,0,count));}
+            var buffer=extended?COMBINED64:COMBINED16;buffer.clear();
+            for(int at=0;at<buffer.capacity();at+=8)buffer.putLong(at,0);
+            var textures=new ArrayList<TextureSpan>();int count=0,omitted=0;var reasons=new LinkedHashSet<String>();
+            if(!replaces) {
+                var base=PlayerReflectionGeometry.capture(body.root(),root,BASE);count=base.count();
+                buffer.position(16).put(base.data().position(16).limit(16+count*288));
+                if(count>0)textures.add(new TextureSpan(playerSkin,0,count));
+            }
             var anchors=new HashMap<String,Matrix4f>();
             for(Object part:parts) {
                 Object source=field(part,"source"),definition=call(source,"definition"),live=field(part,"definition");
@@ -211,18 +224,16 @@ final class PlayerReflectionKAvatar {
                 if(texture==null) {if(isBody)return unavailable("KAvatar body texture is unavailable");omitted++;reasons.add("missing texture");continue;}
                 if(!extended && !chosen.equals(texture)) {omitted++;reasons.add("different texture; extended actor API required");continue;}
                 var raw=rawFrame(root.last().pose(),isBody,anchors.get(anchor),limb(body,anchor),transform);
-                var capture=captureModel(model,matrices,raw,capacity);
+                var capture=captureModel(model,matrices,raw,capacity,extended?PART64:PART16);
                 if(capture.error()!=null || count+capture.geometry().count()>capacity) {
                     String reason=capture.error()==null?capacity+"-box budget":capture.error();
                     if(isBody)return unavailable("KAvatar body unsupported: "+reason);
                     omitted++;reasons.add(reason);continue;
                 }
-                textures.add(new TextureSpan(texture,count,capture.geometry().count()));captures.add(capture);count+=capture.geometry().count();
-            }
-            var buffer=ByteBuffer.allocateDirect(16+capacity*PlayerReflectionGeometry.BOX_BYTES).order(ByteOrder.nativeOrder());int offset=16;
-            for(var capture:captures) {
-                var data=capture.geometry().data();data.position(16).limit(16+capture.geometry().count()*288);
-                buffer.position(offset).put(data);offset+=capture.geometry().count()*288;
+                int boxes=capture.geometry().count();
+                if(boxes==0)continue;
+                buffer.position(16+count*288).put(capture.geometry().data().position(16).limit(16+boxes*288));
+                textures.add(new TextureSpan(texture,count,boxes));count+=boxes;
             }
             buffer.putFloat(0,count);buffer.clear();
             return new Result(buffer.asReadOnlyBuffer().order(ByteOrder.nativeOrder()),List.copyOf(textures),count,

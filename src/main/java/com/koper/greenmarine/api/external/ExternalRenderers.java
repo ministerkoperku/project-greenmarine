@@ -116,7 +116,7 @@ public final class ExternalRenderers {
         if (bytes == 0 || bytes % TRIANGLE_BYTES != 0 || bytes / TRIANGLE_BYTES > MAX_MESH_TRIANGLES)
             throw new IllegalArgumentException("External mesh needs 1.." + MAX_MESH_TRIANGLES + " triangles of " + TRIANGLE_BYTES + " bytes");
         var source = triangles.duplicate().order(triangles.order());
-        var copy = ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder());
+        var copy = ByteBuffer.allocate(bytes).order(ByteOrder.nativeOrder());
         for (int i = 0; i < bytes; i += 4) {
             float value = source.getFloat(source.position() + i);
             if (!Float.isFinite(value)) throw new IllegalArgumentException("Non-finite external mesh value at byte " + i);

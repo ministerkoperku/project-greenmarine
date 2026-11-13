@@ -104,8 +104,8 @@ public final class NativeRayTracer {
     }
     public int scene(ByteBuffer data,int triangles) {
         if(!available()) return -2;
-        if(!data.isDirect() || triangles<1 || triangles>com.koper.greenmarine.client.rt.TriangleScene.MAX_TRIANGLES || data.remaining()!=(long)triangles*96) throw new IllegalArgumentException("Invalid native triangle ABI");
-        try {return result((int)scene.invokeExact(MemorySegment.ofBuffer(data),triangles),"BLAS/TLAS allocation");}
+        validateTriangles(data,triangles);
+        try(var input=NativeInput.of(data)) {return result((int)scene.invokeExact(input.data(),triangles),"BLAS/TLAS allocation");}
         catch(Throwable failed) {error=failed.toString();return -3;}
     }
     public int record(long command,ByteBuffer frame,int width,int height,long color,long normal,long albedo,long atlas) {
@@ -239,15 +239,15 @@ public final class NativeRayTracer {
     public int publishScene(long token) {return serialOperation(publish,token,"Prepared RT scene publication");}
     public int discardPreparedScene(long token) {return serialOperation(discard,token,"Prepared RT scene discard");}
     private static void validateTriangles(ByteBuffer data,int triangles) {
-        if(!data.isDirect() || triangles<1 || triangles>com.koper.greenmarine.client.rt.TriangleScene.MAX_TRIANGLES
+        if(triangles<1 || triangles>com.koper.greenmarine.client.rt.TriangleScene.MAX_TRIANGLES
             || data.remaining()!=(long)triangles*96)throw new IllegalArgumentException("Invalid native triangle ABI");
     }
     /** Run on the scene worker; join that worker before native detach or host-device destruction. */
     public long prepareScene(ByteBuffer data,int triangles) {
         if(!asyncAvailable()){lastPrepareStatus=-2;lastPrepareError=asyncError;return 0;}
         validateTriangles(data,triangles);
-        try {
-            long token=(long)prepare.invokeExact(MemorySegment.ofBuffer(data),triangles);
+        try(var input=NativeInput.of(data)) {
+            long token=(long)prepare.invokeExact(input.data(),triangles);
             lastPrepareStatus=(int)prepareStatusHandle.invokeExact();
             var pointer=(MemorySegment)prepareErrorHandle.invokeExact();
             lastPrepareError=pointer.address()==0?"":pointer.reinterpret(16384).getString(0);
@@ -261,7 +261,7 @@ public final class NativeRayTracer {
     public int sceneAsync(ByteBuffer data,int triangles) {
         if(!asyncAvailable())return -2;
         validateTriangles(data,triangles);
-        try {return asyncResult((int)sceneAsync.invokeExact(MemorySegment.ofBuffer(data),triangles),"Async RT scene replacement");}
+        try(var input=NativeInput.of(data)) {return asyncResult((int)sceneAsync.invokeExact(input.data(),triangles),"Async RT scene replacement");}
         catch(Throwable failed) {asyncError=error=failed.toString();return -3;}
     }
     public int resetSceneAsync() {
@@ -286,10 +286,10 @@ public final class NativeRayTracer {
     /** Any thread; uploads mesh-local triangles (scene ABI) and records a BLAS build for later. */
     public MeshResult prepareMesh(ByteBuffer data,int triangles) {
         if(!externalAvailable())return new MeshResult(0,-2,"External geometry native module is unavailable");
-        if(!data.isDirect() || triangles<1 || triangles>MAX_EXTERNAL_MESH_TRIANGLES || data.remaining()!=(long)triangles*96)
+        if(triangles<1 || triangles>MAX_EXTERNAL_MESH_TRIANGLES || data.remaining()!=(long)triangles*96)
             throw new IllegalArgumentException("Invalid external mesh ABI");
-        try {
-            long token=(long)meshPrepare.invokeExact(MemorySegment.ofBuffer(data),triangles);
+        try(var input=NativeInput.of(data)) {
+            long token=(long)meshPrepare.invokeExact(input.data(),triangles);
             int status=(int)prepareStatusHandle.invokeExact();
             var pointer=(MemorySegment)prepareErrorHandle.invokeExact();
             return new MeshResult(token,status,pointer.address()==0?"":pointer.reinterpret(16384).getString(0));

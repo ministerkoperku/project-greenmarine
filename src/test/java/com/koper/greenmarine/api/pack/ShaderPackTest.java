@@ -46,7 +46,7 @@ class ShaderPackTest {
     }
 
     @Test void boundsPassesAndParameters() {
-        String passes = java.util.stream.IntStream.range(0, 9).mapToObj(i -> "{\"name\":\"p"+i+"\",\"fragment\":\"demo:s\"}").collect(java.util.stream.Collectors.joining(","));
+        String passes = java.util.stream.IntStream.range(0, 257).mapToObj(i -> "{\"name\":\"p"+i+"\",\"fragment\":\"demo:s\"}").collect(java.util.stream.Collectors.joining(","));
         assertThrows(IllegalArgumentException.class, () -> parse("{\"schema\":1,\"id\":\"demo:p\",\"passes\":["+passes+"]}"));
         String parameters = java.util.stream.IntStream.range(0, 33).mapToObj(i -> "\"p"+i+"\":{\"default\":1,\"min\":0,\"max\":2}").collect(java.util.stream.Collectors.joining(","));
         assertThrows(IllegalArgumentException.class, () -> parse("{\"schema\":1,\"id\":\"demo:p\",\"parameters\":{"+parameters+"},\"passes\":[]}"));

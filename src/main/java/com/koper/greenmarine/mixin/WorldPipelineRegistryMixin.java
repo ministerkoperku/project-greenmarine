@@ -16,5 +16,6 @@ public abstract class WorldPipelineRegistryMixin {
     private void greenmarine$hostDefinition(RenderPipeline pipeline, ShaderSource source, Executor executor,
         CallbackInfoReturnable<CompletableFuture<CompiledRenderPipeline.Pending>> ci) {
         SodiumCompatibility.observe(pipeline);
+        com.koper.greenmarine.client.world.WorldPrograms.observe(pipeline);
     }
 }

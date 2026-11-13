@@ -124,20 +124,24 @@ vec3 solAmbient(vec3 n) {
     return ambient*marineParameter(SOL_AMBIENT)*(1.0-Environment.y*.28);
 }
 // Occlusion darkens sky ambient fully and block light partially; direct light keeps its shadow ray.
-vec3 solIrradiance(vec3 n,float skylight,float blocklight,float sunVisibility,float occlusion) {
+vec3 solIrradiance(vec3 n,vec3 geometricNormal,float skylight,float blocklight,float sunVisibility,float occlusion) {
     vec3 ambient=solAmbient(n)*occlusion;
-    float sunlight=max(dot(n,SurfaceSun.xyz),0.0)*SurfaceSun.w*sunVisibility;
+    // Relief and normal maps shape lighting within each opaque geometric
+    // hemisphere; they cannot expose the back of a face to either light.
+    float sunlight=dot(geometricNormal,SurfaceSun.xyz)>0.0?max(dot(n,SurfaceSun.xyz),0.0)*SurfaceSun.w*sunVisibility:0.0;
+    // Keep the moon's geometric horizon independent, including at twilight.
     // Hardware rays trace the moon at night, so its visibility shadows moonlight too.
-    float moonlight=max(dot(n,Moon.xyz),0.0)*Moon.w*.06*marineParameter(SOL_NIGHT)*sunVisibility;
+    float moonlight=dot(geometricNormal,Moon.xyz)>0.0?max(dot(n,Moon.xyz),0.0)*Moon.w*.06*marineParameter(SOL_NIGHT)*sunVisibility:0.0;
     return (ambient+solSunColor()*sunlight+vec3(.38,.53,.86)*moonlight)*skylight
         +(vec3(1.25,.74,.32)*pow(blocklight,3.0)+vec3(.035)*blocklight)*mix(1.0,occlusion,.6);
 }
+vec3 solIrradiance(vec3 n,float skylight,float blocklight,float sunVisibility,float occlusion) {return solIrradiance(n,n,skylight,blocklight,sunVisibility,occlusion);}
 vec3 solIrradiance(vec3 n,float skylight,float blocklight,float sunVisibility) {return solIrradiance(n,skylight,blocklight,sunVisibility,1.0);}
 vec3 solIrradiance(vec3 n,float skylight,float blocklight) {return solIrradiance(n,skylight,blocklight,1.0);}
 // GGX sun highlight with Schlick Fresnel; f0 is per channel so metals tint it.
-vec3 solSunSpecular(vec3 n,vec3 view,float roughness,vec3 f0,float visibility) {
+vec3 solSunSpecular(vec3 n,vec3 geometricNormal,vec3 view,float roughness,vec3 f0,float visibility) {
     float nl=dot(n,SurfaceSun.xyz);
-    if(nl<=0.0 || visibility<=0.0 || SurfaceSun.w<=0.0) return vec3(0);
+    if(dot(geometricNormal,SurfaceSun.xyz)<=0.0 || nl<=0.0 || visibility<=0.0 || SurfaceSun.w<=0.0) return vec3(0);
     vec3 h=normalize(view+SurfaceSun.xyz);
     float a=max(roughness*roughness,.003),a2=a*a;
     float nh=max(dot(n,h),0.0),d=nh*nh*(a2-1.0)+1.0;
@@ -147,6 +151,7 @@ vec3 solSunSpecular(vec3 n,vec3 view,float roughness,vec3 f0,float visibility) {
     float geometry=nl/(nl*(1.0-k)+k)*nv/(nv*(1.0-k)+k);
     return solSunColor()*SurfaceSun.w*visibility*min(distribution*geometry/(4.0*nv),16.0)*fresnel;
 }
+vec3 solSunSpecular(vec3 n,vec3 view,float roughness,vec3 f0,float visibility) {return solSunSpecular(n,n,view,roughness,f0,visibility);}
 float solPuddle(vec3 p,vec3 n,float skylight) {
     if(Environment.z<=0.0 || marineParameter(SOL_WETNESS)<=0.0 || marineParameter(SOL_PUDDLES)<=0.0
         || n.y<=.72 || skylight<=.65) return 0.0;

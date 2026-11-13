@@ -12,6 +12,8 @@ public final class ProgramSources implements BinaryShaderSource {
     private final boolean vulkan;
     private final Map<Identifier, CachedIncludeSource> includes = new HashMap<>();
     public ProgramSources(ShaderProgram program, boolean vulkan) { this.program = program; this.vulkan = vulkan; }
+    public ShaderProgram program() {return program;}
+    @Override public ShaderProgram graphicsProgram() {return program;}
     @Override public String getShader(Identifier id, ShaderType type) { return program.source(id,type); }
     @Override public CachedIncludeSource getInclude(Identifier id) {
         return includes.computeIfAbsent(id, key -> {
@@ -20,7 +22,13 @@ public final class ProgramSources implements BinaryShaderSource {
         });
     }
     @Override public SpvModule rawModule(String name, ShaderType type) {
-        if (!vulkan || type != ShaderType.FRAGMENT) return null;
+        if(!vulkan)return null;
+        var stage=program.stages().get(type==ShaderType.VERTEX?com.koper.greenmarine.api.render.GraphicsStage.VERTEX:com.koper.greenmarine.api.render.GraphicsStage.FRAGMENT);
+        if(stage!=null && stage.binary()!=null) {
+            byte[] bytes=stage.binary().bytes();var data=org.lwjgl.system.MemoryUtil.memAlloc(bytes.length);data.put(bytes).flip();
+            return new com.mojang.renderpearl.frontend.shaders.SPIRVModule(data,type);
+        }
+        if(type!=ShaderType.FRAGMENT)return null;
         var binary = program.fragments().get(Identifier.parse(name));
         if (binary == null || !binary.baselineCompatible()) return null;
         byte[] bytes = binary.bytes(); var data = org.lwjgl.system.MemoryUtil.memAlloc(bytes.length); data.put(bytes).flip();

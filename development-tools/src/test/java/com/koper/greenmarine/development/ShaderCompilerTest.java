@@ -13,7 +13,10 @@ class ShaderCompilerTest {
     @Test void compilesActualGlslForEachStage() {
         var sources = Map.of(Stage.VERTEX, "void main(){gl_Position=vec4(0.0);}",
             Stage.FRAGMENT, "layout(location=0) out vec4 color; void main(){color=vec4(1.0);}",
-            Stage.COMPUTE, "layout(local_size_x=1) in; void main(){}");
+            Stage.COMPUTE, "layout(local_size_x=1) in; void main(){}",
+            Stage.GEOMETRY,"layout(points)in;layout(points,max_vertices=1)out;void main(){gl_Position=gl_in[0].gl_Position;EmitVertex();EndPrimitive();}",
+            Stage.TESS_CONTROL,"layout(vertices=3)out;void main(){gl_out[gl_InvocationID].gl_Position=gl_in[gl_InvocationID].gl_Position;}",
+            Stage.TESS_EVALUATION,"layout(triangles,equal_spacing,ccw)in;void main(){gl_Position=gl_in[0].gl_Position;}");
         sources.forEach((stage, source) -> {
             var result = compile(Language.GLSL, stage, "#version 450\n" + source, "example.glsl", null);
             assertTrue(result.success(), result.diagnostics());
@@ -21,7 +24,7 @@ class ShaderCompilerTest {
             var words = ByteBuffer.wrap(result.spirv()).order(ByteOrder.LITTLE_ENDIAN);
             int model = -1;
             for (int i=20;i<words.capacity();) { int op=words.getInt(i); if((op&65535)==15) model=words.getInt(i+4); i+=(op>>>16)*4; }
-            assertEquals(switch(stage) {case VERTEX -> 0; case FRAGMENT -> 4; case COMPUTE -> 5;}, model);
+            assertEquals(switch(stage) {case VERTEX -> 0; case TESS_CONTROL->1;case TESS_EVALUATION->2;case GEOMETRY->3;case FRAGMENT -> 4; case COMPUTE -> 5;}, model);
         });
     }
     @Test void reportsActualSyntaxErrorsWithoutBinary() {

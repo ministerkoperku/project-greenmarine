@@ -20,6 +20,20 @@ class ProjectValidationTest {
     private ProjectValidator.Result validate(ShaderProject project,Map<String,String> drafts){
         return ProjectValidator.validate(project,drafts,id->null,id->null);
     }
+    @Test void intermediateStageDraftsAreEditableAndReportTheirOwnCompilerErrors()throws Exception{
+        var project=project(",\"programs\":[{\"vertex\":\"test:core/main\",\"fragment\":\"test:core/main\",\"geometry\":\"test:core/main\"}]");
+        var workspace=project.workspace();
+        workspace.save("pack/assets/test/shaders/core/main.vsh","#version 450\nvoid main(){gl_Position=vec4(1);}");
+        String geometry="pack/assets/test/shaders/core/main.gsh";
+        String valid="#version 450\nlayout(points)in;layout(points,max_vertices=1)out;void main(){gl_Position=gl_in[0].gl_Position;EmitVertex();EndPrimitive();}";
+        assertDoesNotThrow(()->workspace.save(geometry,valid));
+        assertEquals(valid,workspace.read(geometry));
+        assertTrue(validate(project,Map.of()).valid());
+        var result=validate(project,Map.of(geometry,"#version 450\ninvalid geometry;"));
+        assertFalse(result.valid());
+        assertTrue(result.problems().stream().anyMatch(p->p.path().equals(geometry)&&p.line()==2),result.summary());
+        assertEquals(valid,workspace.read(geometry));
+    }
     @Test void validatesEveryManifestAndItsUnopenedShaderWithoutWritingDrafts()throws Exception{
         var project=project("");
         String second="pack/assets/test/greenmarine/packs/second.json";

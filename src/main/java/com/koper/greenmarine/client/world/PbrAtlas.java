@@ -55,7 +55,7 @@ public final class PbrAtlas implements AutoCloseable {
         var resources=client.getResourceManager();
         try(var specularImage=new NativeImage(width,height,false);var normalImage=new NativeImage(width,height,false)) {
             specularImage.fillRect(0,0,width,height,EMPTY_SPECULAR);normalImage.fillRect(0,0,width,height,FLAT_NORMAL);
-            specularMaps=normalMaps=0;int inferredMaps=0,addonMaps=0;
+            specularMaps=normalMaps=0;int inferredMaps=0,addonMaps=0,builtinEmissionMaps=0;
             var mask=java.nio.ByteBuffer.allocateDirect(Math.multiplyExact(width,height));
             for(var sprite:((TextureAtlasAccessor)atlas).greenmarine$sprites().values()) {
                 var name=sprite.contents().name();
@@ -74,7 +74,11 @@ public final class PbrAtlas implements AutoCloseable {
                         |(Math.round(inferred.reflectance()*255)<<8)|Math.round(inferred.sunlightTransmission()*255);
                     specularImage.fillRect(x,y,w,h,encoded);inferredMaps++;
                 }
-                byte flags=(byte)((hasSpecular?1:0)|(hasNormal?2:0)|(inferred!=null?4:0));
+                // Source emission is sprite identity, never received block light or albedo
+                // brightness. Authored LabPBR wins; custom addon pixels below can replace it.
+                int intrinsic=hasSpecular?0:BuiltinEmissions.addonPixel(name.toString());
+                if(intrinsic!=0) {specularImage.fillRect(x,y,w,h,intrinsic);builtinEmissionMaps++;}
+                byte flags=(byte)((hasSpecular?1:0)|(hasNormal?2:0)|(intrinsic!=0?8:inferred!=null?4:0));
                 if(flags!=0)for(int dy=0;dy<h;dy++)for(int dx=0;dx<w;dx++)mask.put((y+dy)*width+x+dx,flags);
                 if(!hasSpecular && w<=2048 && h<=2048) {
                     var compiled=com.koper.greenmarine.api.material.MaterialAddons.resolve(name.toString(),
@@ -93,7 +97,7 @@ public final class PbrAtlas implements AutoCloseable {
                     }
                 }
             }
-            if(specularMaps+normalMaps+inferredMaps+addonMaps>0) {
+            if(specularMaps+normalMaps+inferredMaps+addonMaps+builtinEmissionMaps>0) {
                 var device=RenderSystem.getDevice();int usage=GpuTexture.USAGE_TEXTURE_BINDING|GpuTexture.USAGE_COPY_DST;
                 specular=device.createTexture("GreenMarine LabPBR specular atlas",usage,GpuFormat.RGBA8_UNORM,width,height,1,1);
                 normal=device.createTexture("GreenMarine LabPBR normal atlas",usage,GpuFormat.RGBA8_UNORM,width,height,1,1);
@@ -104,7 +108,7 @@ public final class PbrAtlas implements AutoCloseable {
             }
             builtFor=atlasTexture;builtMaterialsGeneration=materialGeneration;
             // Renderpearl copies uploads into staging immediately; CPU images can close here.
-            GreenMarine.LOGGER.info("LabPBR material maps: {} specular, {} normal, {} inferred, {} addon ({}x{} atlas)",specularMaps,normalMaps,inferredMaps,addonMaps,width,height);
+            GreenMarine.LOGGER.info("LabPBR material maps: {} specular, {} normal, {} inferred, {} addon, {} builtin emission ({}x{} atlas)",specularMaps,normalMaps,inferredMaps,addonMaps,builtinEmissionMaps,width,height);
         }
     }
 

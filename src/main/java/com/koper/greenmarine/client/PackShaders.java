@@ -6,9 +6,17 @@ import net.minecraft.resources.Identifier;
 
 final class PackShaders implements BinaryShaderSource {
     private final PackCatalog.LoadedPack pack;
+    private final java.util.Map<String,com.koper.greenmarine.api.pack.PackUniformBlock> uniformBlocks;
     private final java.util.Map<Identifier,CachedIncludeSource> includes=new java.util.HashMap<>();
-    PackShaders(PackCatalog.LoadedPack pack) { this.pack = pack; }
+    PackShaders(PackCatalog.LoadedPack pack) {this(pack,java.util.Map.of());}
+    PackShaders(PackCatalog.LoadedPack pack,java.util.Map<String,com.koper.greenmarine.api.pack.PackUniformBlock> uniformBlocks) {
+        this.pack=pack;this.uniformBlocks=java.util.Map.copyOf(uniformBlocks);
+    }
+    @Override public void validateModule(String name,ShaderType type,com.mojang.renderpearl.backend.api.SpvModule module) {
+        if(!uniformBlocks.isEmpty())UniformAbi.validate(module.spv(),uniformBlocks);
+    }
     @Override public String getShader(Identifier id, ShaderType type) {
+        if(type==ShaderType.VERTEX && !id.toString().equals("greenmarine:pack/screenquad"))return pack.sources().get("vertex|"+id);
         if (type == ShaderType.VERTEX) return """
             #version 330
             #extension GL_ARB_separate_shader_objects : require
@@ -42,6 +50,7 @@ final class PackShaders implements BinaryShaderSource {
         var module=new com.mojang.renderpearl.frontend.shaders.SPIRVModule(nativeBytes,type);
         try {
             module.reflect();
+            validateModule(name,type,module);
             com.koper.greenmarine.GreenMarine.LOGGER.info("Loaded pack SPIR-V fragment {} ({} bytes)",name,bytes.length);
             return module;
         } catch(com.mojang.renderpearl.util.ShaderCompileException | RuntimeException error) {

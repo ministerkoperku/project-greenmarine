@@ -47,17 +47,19 @@ public final class WorldSceneScanner {
         cameraX=x;cameraY=y;cameraZ=z;cache.retarget(bounds,x,y,z);trackPending();
     }
     public long revision() {return cache.revision();}
-    public int boundsReadyPending() {return cache.pendingSections();}
+    public int boundsReadyPending() {return cache.pendingSections()+cache.unavailableSections();}
     public SectionSceneCache.Snapshot snapshot() {return cache.snapshot();}
     public SectionSceneCache.Snapshot publicationSnapshot(SceneBounds previous) {return cache.publicationSnapshot(previous);}
+    public boolean canPublish(SceneBounds bounds,long contentHash) {return cache.canPublish(bounds,contentHash);}
     public Metrics metrics() {
         var m=cache.metrics();return new Metrics(m.rebuiltSections(),m.cacheHits(),m.cachedSections(),m.pendingSections(),
             scannedBlocks,scanNanos,pendingSince==0?0:System.nanoTime()-pendingSince);
     }
     private void trackPending() {
-        if(cache.pendingSections()==0)pendingSince=0;else if(pendingSince==0)pendingSince=System.nanoTime();
+        if(boundsReadyPending()==0)pendingSince=0;else if(pendingSince==0)pendingSince=System.nanoTime();
     }
     public void invalidateBlock(BlockPos pos) {cache.invalidateBlock(pos.getX(),pos.getY(),pos.getZ());trackPending();}
+    public void invalidateSection(int x,int y,int z) {cache.invalidateSection(x,y,z);trackPending();}
     public void invalidateColumn(int x,int z) {cache.invalidateColumn(x,z);trackPending();}
     public void unloadColumn(int x,int z) {cache.unloadColumn(x,z);observed.remove(new SectionSceneCache.ColumnKey(x,z));trackPending();}
     public void invalidateAll() {cache.invalidateAll();trackPending();}
@@ -109,36 +111,43 @@ public final class WorldSceneScanner {
                     budget--;scannedBlocks++;
                     var state=chunk.getBlockState(position.set(key.blockX()+dx,key.blockY()+dy,key.blockZ()+dz));
                     if(state.getRenderShape()!=RenderShape.MODEL)continue;
-                    tints.reset();tintState=state;
-                    parts.clear();random.setSeed(state.getSeed(position));
-                    client.getModelManager().getBlockStateModelSet().get(state).collectParts(random,parts);
-                    var offset=state.getOffset(position);
-                    for(var part:parts) {
-                        add(client,state,part.getQuads(null),dx+(float)offset.x,dy+(float)offset.y,dz+(float)offset.z,state.getLightEmission());
-                        for(var face:FACES) {
-                            if(state.isSolidRender() && client.level.getBlockState(neighbor.set(position.getX()+face.getStepX(),
-                                position.getY()+face.getStepY(),position.getZ()+face.getStepZ())).isSolidRender())continue;
-                            add(client,state,part.getQuads(face),dx+(float)offset.x,dy+(float)offset.y,dz+(float)offset.z,state.getLightEmission());
-                        }
-                    }
+                    var custom=com.koper.greenmarine.api.render.BlockRayModels.parts(client.level,position,state,null);
+                    if(custom==null)captureModel(client,state,dx,dy,dz,1,63,true);
+                    else for(var piece:custom)captureModel(client,piece.material(),dx+piece.x(),dy+piece.y(),dz+piece.z(),piece.scale(),piece.faceMask(),false);
                 }
                 if(cursor!=SECTION_CELLS)break;
                 cache.complete(ticket,staging==null?EMPTY:staging.finish());ticket=null;staging=null;cursor=0;
             }
-            trackPending();return cache.pendingSections()==0;
+            trackPending();return boundsReadyPending()==0;
         } finally {scanNanos+=System.nanoTime()-started;}
     }
-    private void add(Minecraft client,net.minecraft.world.level.block.state.BlockState state,List<BakedQuad> quads,float x,float y,float z,int emission) {
+    private void captureModel(Minecraft client,net.minecraft.world.level.block.state.BlockState state,float x,float y,float z,float scale,int mask,boolean neighborCull) {
+        if(mask==0 || state.getRenderShape()!=RenderShape.MODEL)return;
+        tints.reset();tintState=state;parts.clear();random.setSeed(state.getSeed(position));
+        client.getModelManager().getBlockStateModelSet().get(state).collectParts(random,parts);
+        var offset=state.getOffset(position);x+=(float)offset.x*scale;y+=(float)offset.y*scale;z+=(float)offset.z*scale;
+        for(var part:parts) {
+            add(client,state,part.getQuads(null),x,y,z,scale,mask,state.getLightEmission());
+            for(var face:FACES) {
+                if((mask&1<<face.ordinal())==0)continue;
+                if(neighborCull && state.isSolidRender() && client.level.getBlockState(neighbor.set(position.getX()+face.getStepX(),
+                    position.getY()+face.getStepY(),position.getZ()+face.getStepZ())).isSolidRender())continue;
+                add(client,state,part.getQuads(face),x,y,z,scale,mask,state.getLightEmission());
+            }
+        }
+    }
+    private void add(Minecraft client,net.minecraft.world.level.block.state.BlockState state,List<BakedQuad> quads,float x,float y,float z,float scale,int mask,int emission) {
         float sunlight=transmission.computeIfAbsent(state.getBlock(),block -> com.koper.greenmarine.api.render.BlockMaterials
             .forBlock(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(block).toString()).sunlightTransmission());
         for(var quad:quads) {
+            if((mask&1<<quad.direction().ordinal())==0)continue;
             if(!quad.materialInfo().sprite().atlasLocation().equals(net.minecraft.client.renderer.texture.TextureAtlas.LOCATION_BLOCKS))continue;
             int tint=0xFFFFFF;
             if(quad.materialInfo().isTinted())tint=tints.colour(quad.materialInfo().tintIndex(),tintLookup);
             for(int triangle=0;triangle<2;triangle++) {
                 for(int corner=0;corner<3;corner++) {
                     int index=triangle==0?corner:corner==0?0:corner==1?2:3;
-                    var vertex=quad.position(index);vertices[corner*3]=vertex.x()+x;vertices[corner*3+1]=vertex.y()+y;vertices[corner*3+2]=vertex.z()+z;
+                    var vertex=quad.position(index);vertices[corner*3]=vertex.x()*scale+x;vertices[corner*3+1]=vertex.y()*scale+y;vertices[corner*3+2]=vertex.z()*scale+z;
                     long packed=quad.packedUV(index);uv[corner*2]=UVPair.unpackU(packed);uv[corner*2+1]=UVPair.unpackV(packed);
                 }
                 staging.triangle(vertices,uv,tint,Math.max(emission,quad.materialInfo().lightEmission()),
@@ -154,8 +163,9 @@ public final class WorldSceneScanner {
     }
     /** Explicit legacy assembly. New callers assemble snapshot() on their worker. */
     public TriangleScene completed() {
-        if(cache.bounds()==null||cache.pendingSections()!=0)return null;
-        return cache.snapshot().assemble();
+        if(cache.bounds()==null||boundsReadyPending()!=0)return null;
+        var snapshot=cache.snapshot();
+        return snapshot.complete()?snapshot.assemble():null;
     }
     public int progress() {return cache.resolvedSections()*SECTION_CELLS+(ticket!=null&&cache.valid(ticket)?cursor:0);}
 }

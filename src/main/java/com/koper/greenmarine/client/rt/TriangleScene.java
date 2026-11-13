@@ -34,7 +34,7 @@ public final class TriangleScene {
             if(max<=0 || max>MAX_TRIANGLES) throw new IllegalArgumentException("Invalid triangle budget");
             if(initialTriangles<0 || initialTriangles>max)throw new IllegalArgumentException("Invalid initial triangle capacity");
             this.x=x;this.y=y;this.z=z;this.max=max;
-            data=ByteBuffer.allocateDirect(initialTriangles*TRIANGLE_BYTES).order(ByteOrder.nativeOrder());
+            data=ByteBuffer.allocate(initialTriangles*TRIANGLE_BYTES).order(ByteOrder.nativeOrder());
         }
         public void triangle(float[] positions,float[] uv,int tint,int emission,boolean cutout) {
             triangle(positions,uv,tint,emission,cutout,0);
@@ -55,7 +55,7 @@ public final class TriangleScene {
             if(nx*nx+ny*ny+nz*nz<1e-12f) return;
             if(count==max) throw new IllegalArgumentException("World triangle budget exceeded");
             if(data.remaining()<TRIANGLE_BYTES) {
-                var next=ByteBuffer.allocateDirect(Math.min(max*TRIANGLE_BYTES,Math.max(TRIANGLE_BYTES,data.capacity()*2))).order(ByteOrder.nativeOrder());
+                var next=ByteBuffer.allocate(Math.min(max*TRIANGLE_BYTES,Math.max(TRIANGLE_BYTES,data.capacity()*2))).order(ByteOrder.nativeOrder());
                 data.flip();next.put(data);data=next;
             }
             for(int i=0;i<3;i++) { for(int j=0;j<3;j++) put(positions[i*3+j]);put(0); }
@@ -70,7 +70,7 @@ public final class TriangleScene {
             var input=source.data();
             while(input.hasRemaining()) {
                 if(data.remaining()<TRIANGLE_BYTES) {
-                    var next=ByteBuffer.allocateDirect(Math.min(max*TRIANGLE_BYTES,Math.max(data.capacity()*2,(count+1)*TRIANGLE_BYTES))).order(ByteOrder.nativeOrder());
+                    var next=ByteBuffer.allocate(Math.min(max*TRIANGLE_BYTES,Math.max(data.capacity()*2,(count+1)*TRIANGLE_BYTES))).order(ByteOrder.nativeOrder());
                     data.flip();next.put(data);data=next;
                 }
                 for(int vertex=0;vertex<3;vertex++){put(input.getFloat()+dx);put(input.getFloat()+dy);put(input.getFloat()+dz);put(input.getFloat());}
@@ -81,7 +81,7 @@ public final class TriangleScene {
         private void put(float value) { data.putFloat(value);hash=(hash^Integer.toUnsignedLong(Float.floatToRawIntBits(value)))*0x100000001b3L; }
         public TriangleScene finish() {
             requireOpen();
-            var result=ByteBuffer.allocateDirect(count*TRIANGLE_BYTES).order(ByteOrder.nativeOrder());
+            var result=ByteBuffer.allocate(count*TRIANGLE_BYTES).order(ByteOrder.nativeOrder());
             var copy=data.duplicate();copy.flip();result.put(copy).flip();
             return new TriangleScene(x,y,z,count,result,hash);
         }

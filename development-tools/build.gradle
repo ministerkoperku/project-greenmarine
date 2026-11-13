@@ -42,7 +42,7 @@ tasks.register('irisConverterDistribution', Zip) {
     destinationDirectory = layout.buildDirectory.dir('distributions')
     from(tasks.named('jar')) { into 'lib' }
     from(greenmarineJar) { into 'lib' }
-    from({ configurations.runtimeClasspath.files.findAll { it.name ==~ /lwjgl(-shaderc)?-[0-9].*\.jar/ } }) { into 'lib' }
+    from({ configurations.runtimeClasspath.files.findAll { it.name ==~ /lwjgl(-shaderc)?-[0-9].*\.jar/ || it.name ==~ /gson-[0-9].*\.jar/ } }) { into 'lib' }
     from('tools/iris-import.sh')
     from('IRIS-IMPORT.md')
     from('CONVERTER-README.txt') { rename { 'README.txt' } }
@@ -81,6 +81,33 @@ tasks.register('irisCoverage', JavaExec) {
     jvmArgs '--enable-native-access=ALL-UNNAMED'
     args providers.gradleProperty('irisPack').getOrElse('')
     if (providers.gradleProperty('irisDump').isPresent()) args providers.gradleProperty('irisDump').get()
+}
+
+tasks.register('irisConvert', JavaExec) {
+    description = 'Export an editable whole-program Iris conversion. -PirisPack=<dir|zip> -PirisDestination=<new-directory>'
+    dependsOn tasks.named('classes')
+    classpath = sourceSets.main.runtimeClasspath + files(greenmarineJar)
+    mainClass = 'com.koper.greenmarine.development.IrisImporter'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    maxHeapSize = '2g'
+    args providers.gradleProperty('irisPack').getOrElse(''), providers.gradleProperty('irisDestination').getOrElse('')
+}
+
+tasks.register('terrainAdapterFixture', JavaExec) {
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.koper.greenmarine.development.iris.TerrainAdapterFixture'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    args providers.gradleProperty('terrainAdapterDestination').getOrElse('build/terrain-adapter-fixture')
+}
+
+tasks.register('automaticTerrainFixture', JavaExec) {
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.koper.greenmarine.development.iris.AutomaticTerrainFixture'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+    args providers.gradleProperty('terrainSource').getOrElse(''), providers.gradleProperty('terrainDestination').getOrElse('')
+    args providers.gradleProperty('terrainStages').getOrElse('none')
 }
 
 // Embed the renderer's current authoring sources; never maintain a second API/doc copy.

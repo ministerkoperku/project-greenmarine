@@ -20,13 +20,24 @@ public final class RenderSchedule {
         if (width <= 0 || height <= 0) return List.of();
         var result = new ArrayList<Pass>();
         for (var pass : pack.passes()) if (pass.stage() != PackPass.Stage.LIGHTMAP) {
-            RenderPolicy.pass(pass,quality,caps,rays).ifPresent(resolved -> result.add(new Pass(resolved,
-                Math.max(1,(int)Math.ceil(width * pass.scale())), Math.max(1,(int)Math.ceil(height * pass.scale())))));
+            RenderPolicy.pass(pass,quality,caps,rays).ifPresent(resolved -> {
+                int passWidth=Math.max(1,(int)Math.ceil(width*pass.scale())),passHeight=Math.max(1,(int)Math.ceil(height*pass.scale()));
+                if(!pass.outputs().isEmpty()) {
+                    var first=pack.targets().get(pass.outputs().get(0));passWidth=first.width(width);passHeight=first.height(height);
+                    for(var name:pass.outputs().values()) {
+                        var target=pack.targets().get(name);
+                        if(target.width(width)!=passWidth || target.height(height)!=passHeight)
+                            throw new IllegalArgumentException("Attachments of "+pass.name()+" have different resolved dimensions");
+                    }
+                }
+                result.add(new Pass(resolved,passWidth,passHeight));
+            });
         }
+        result.sort(java.util.Comparator.comparing(pass->pass.resolved().definition().phase()));
         var available=new HashSet<String>();
         for(var selected:result) {
             var definition=selected.resolved().definition();
-            for(var producer:definition.inputs().values()) if(!available.contains(producer) && !pack.resources().images().containsKey(producer))
+            for(var producer:definition.inputs().values()) if(PackDepthSource.named(producer)==null && !available.contains(producer) && !pack.resources().images().containsKey(producer) && !pack.targets().containsKey(producer))
                 throw new IllegalArgumentException("Selected pass "+definition.name()+" requires unavailable scene pass: "+producer);
             if(definition.stage()==PackPass.Stage.SCENE) available.add(definition.name());
         }

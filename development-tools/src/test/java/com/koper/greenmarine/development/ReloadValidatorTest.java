@@ -27,6 +27,17 @@ class ReloadValidatorTest {
         write(shaders().resolve("test/assets/demo/shaders/core/unused.fsh"),"invalid unused source");
         assertNull(validator().validate(List.of(shader,original,candidate)));
     }
+    @Test void invalidOrMissingDeclaredGeometryCannotBeReloaded()throws Exception{
+        Path shader=pack();
+        Path manifest=shaders().resolve("test/assets/demo/greenmarine/packs/main.json");
+        Files.writeString(manifest,"{\"schema\":1,\"id\":\"demo:test\",\"passes\":[],\"programs\":[{\"vertex\":\"demo:core/main\",\"fragment\":\"demo:core/main\",\"geometry\":\"demo:core/main\"}]}");
+        write(shader.resolveSibling("main.vsh"),"#version 450\nvoid main(){gl_Position=vec4(1.);}");
+        Path geometry=write(shader.resolveSibling("main.gsh"),"#version 450\ninvalid geometry;");
+        assertNotNull(validator().validate(List.of(geometry)),"Invalid declared stage must prevent reload");
+        Files.writeString(geometry,"#version 450\nlayout(points)in;layout(points,max_vertices=1)out;void main(){gl_Position=gl_in[0].gl_Position;EmitVertex();EndPrimitive();}");
+        assertNull(validator().validate(List.of(geometry)));
+        Files.delete(geometry);assertNotNull(validator().validate(List.of(geometry)));
+    }
     @Test void removedRequiredIncludeIsRejectedEvenWithStaleMountedFallback()throws Exception{
         Path shader=pack();Files.writeString(shader,"#version 450\n#moj_import <demo:value.glsl>\nlayout(location=0) out vec4 color; void main(){color=value();}");
         Path include=write(shaders().resolve("test/assets/demo/shaders/include/value.glsl"),"vec4 value(){return vec4(1.0);}");

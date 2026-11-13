@@ -117,9 +117,14 @@ public final class ShaderRuntime {
             if (active != null) {
                 try {
                     script = new PackScript(active.definition(), active.script(), GreenMarine.LIGHTS);
+                    com.koper.greenmarine.client.terrain.TerrainPack.activate(active.definition().terrain(),client);
                     updateOverrides();
                     GreenMarine.LOGGER.info("Initialized shaderpack script {}: quality={}, rays={}, reason={}", active.definition().id(), settings.quality(), rays().effective(), rays().reason());
-                } catch (RuntimeException error) { LOAD.begin(settings.pack(),java.util.Set.of());LOAD.fail("Script initialization failed: "+error.getMessage());notice();GreenMarine.LOGGER.error("Shaderpack script initialization failed", error); }
+                } catch (RuntimeException error) {
+                    if(script!=null)script.close();script=null;
+                    com.koper.greenmarine.client.terrain.TerrainPack.release(client);
+                    LOAD.begin(settings.pack(),java.util.Set.of());LOAD.fail("Shaderpack initialization failed: "+error.getMessage());notice();GreenMarine.LOGGER.error("Shaderpack initialization failed", error);
+                }
             }
         }
         if (script != null) {
@@ -134,6 +139,7 @@ public final class ShaderRuntime {
         }
     }
     public static void reset() {
+        com.koper.greenmarine.client.terrain.TerrainPack.release(Minecraft.getInstance());
         com.koper.greenmarine.api.material.MaterialAddons.setActivePackId(settings.pack());
         if (script != null) script.close(); script = null; active = null; failureReported = false;
         expected=java.util.Set.of();LOAD.begin(settings.pack(),expected);lastNotice=null;

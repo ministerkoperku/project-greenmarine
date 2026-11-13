@@ -128,6 +128,10 @@ Select it with `"effect": "demo:aurora"` in `greenmarine.json`.
 
 Mod developers: [rendering API](RENDERING-API.md), [shaderpacks](SHADERPACKS.md), [compute](COMPUTE.md),
 [world programs](WORLD-PROGRAMS.md), [surface rendering](SURFACE-RENDERING.md),
-[external renderers](EXTERNAL-RENDERERS.md), [roadmap](API-ROADMAP.md).
+[external renderers](EXTERNAL-RENDERERS.md), [data-driven block ray models](BLOCK-RAY-MODELS.md),
+[named scene targets](SCENE-TARGETS.md), [uniform blocks](PACK-UNIFORMS.md),
+[terrain attribute capture](TERRAIN-ATTRIBUTES.md), [geometry and tessellation](GRAPHICS-STAGES.md),
+[procedural scene vertices](CUSTOM-SCENE-VERTICES.md),
+[Iris frame inputs](IRIS-UNIFORMS.md), [roadmap](API-ROADMAP.md).
 
 Resource-pack material support: [LabPBR](LABPBR.md).

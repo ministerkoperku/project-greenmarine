@@ -6,6 +6,15 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RenderScheduleTest {
+    @Test void rendererDepthInputsRemainAvailableWithoutAUserProducerPass() {
+        var pack=ShaderPack.parse(com.google.gson.JsonParser.parseString("""
+            {"schema":1,"id":"test:depth","passes":[
+              {"name":"prepare","phase":"prepare","fragment":"test:prepare",
+               "inputs":{"Depth0":"world_depth","Depth1":"opaque_depth","Depth2":"opaque_no_hand_depth"}}]}
+            """).getAsJsonObject());
+        var schedule=assertDoesNotThrow(()->RenderSchedule.scene(pack,Quality.LOW,new RenderCapabilities("Vulkan",false,false,false,true),RayMode.OFF,801,601));
+        assertEquals(1,schedule.size());assertEquals(801,schedule.getFirst().width());
+    }
     @Test void retainsOnlyReferencedSelectedOutputsAcrossInterveningPasses() {
         var pack=ShaderPack.parse(com.google.gson.JsonParser.parseString("""
             {"schema":1,"id":"test:inputs","passes":[

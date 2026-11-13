@@ -73,6 +73,7 @@ final class ProjectValidator {
                     stages.put(PackCatalog.shaderResource(program.fragment()),ShaderCompiler.Stage.FRAGMENT);
                     if(program.surface()!=null)stages.put(PackCatalog.shaderResource(program.surface()),ShaderCompiler.Stage.FRAGMENT);
                     if(program.vertex()!=null)stages.put(PackCatalog.shaderResource(program.vertex()).replaceFirst("\\.fsh$",".vsh"),ShaderCompiler.Stage.VERTEX);
+                    program.stages().forEach((stage,id)->stages.put(PackCatalog.stageResource(stage,id),ShaderCompiler.Stage.valueOf(stage.name())));
                 }
                 if(pack.script()!=null){
                     String scriptPath=resolver.path(pack.script());

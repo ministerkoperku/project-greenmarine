@@ -11,6 +11,14 @@ items, other players and mobs are not included.
 `PlayerReflection.detail()` and the surface RT status line report what was
 captured (box count, KAvatar parts, omissions and why).
 
+CPU capture scratch storage is reused. A `PlayerReflection.Snapshot` owns a bounded
+native payload lease: retain it until its GPU submission completes, then close the
+snapshot, never its skin. GreenMarine does this through the host fence and native
+submission lifecycle. `PlayerReflection.memoryStats()` reports allocated slots,
+active leases and native payload bytes. World/pack teardown drains submissions
+before freeing the payload Arena; rendering does not depend on direct-buffer
+Cleaner runs or explicit GC being enabled.
+
 ## KAvatar bodies
 
 With KAvatar 0.3.x installed, GreenMarine reads its public frame snapshot

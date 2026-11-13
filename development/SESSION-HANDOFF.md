@@ -1,5 +1,196 @@
 # GreenMarine session handoff
 
+## Latest: Solstice repairs, 2026-11-09
+
+Owner paused Iris work and authorized Solstice repairs after planning. Read
+`2026-11-09-solstice-repair-plan.md` and `2026-11-09-solstice-repair-evidence.md`.
+Default resources, no external resourcepack, forced Hardware at every quality,
+RX9070XT, Gigabyte1440p180Hz, viewport2560x1370, no Sodium. Preserve all Iris WIP.
+
+Confirmed native local-light endpoint occluder defect fixed (actual GPU red/green),
+event/availability-aware bounded static-light caching added with stable-frame
+memoization, and ordinary entities now receive held/drop/fire light through host
+lightmap coordinates also with rays Off. Actual Vulkan entity probe passes
+near/empty/re-equipped/far/rays-Off/pack-none checks with unchanged world light.
+Java498 tests13 skipped, Python88, Rust17 default and15 explicit Vulkan tests pass;
+release native built. Independent scoped review clean. No installed JAR, commit,
+push or Android export.
+
+FIRST TEXTURE REPORT REMAINS OPEN: definite final-color history borrowing is
+now repaired (old albedo tolerance0.035 mixed distinct texels; new per-channel
+RGBA16F matching,8 behavioral regressions and actual moving Vulkan before/after).
+Owner still sees affected blocks looking alike, closer to vanilla/less smoothed,
+possibly lighting-related. Coverage diagnostic is uniformly full on the captured
+sand plane; no material/relief default was disabled. Do not call the whole issue
+solved. See `motion`, `motion-after`, `coverage` probe directories. Remaining
+shadow screenshots, actual delayed lava appearance, DH shadows, presets/manual
+controls, raster quality, water/clouds/footprints and Ultra FPS remain open.
+
+After the owner tested and said history alone only reduced the artifact, two
+additional shader defects were reproduced and repaired: forward-only procedural
+relief could be bumped at0degrees but flat at180degrees for the same jointly
+rotated heightfield; symmetric differences fix it. Geometric-backside faces could
+receive direct diffuse/specular through a tilted shading normal in raster/fading
+RT; separate geometric Sun/Moon gates fix that.8 relief and7 horizon regressions
+pass, old GLSL overloads preserved, PBR paths/parameters remain enabled. Actual
+`relief-after` Vulkan run completes; root final horizon/runtime/artifact checks
+are recorded in evidence. The owner explicitly rejected disabling PBR and
+requested continued work after testing; do not wait idle for permission.
+
+## Latest: bounded image frame-clear translation, 2026-11-05
+
+Owner clarified source/API translation and requested a small task to conserve
+budget. Completed only Iris image clear-flag translation to native GreenMarine
+`resources.images.<name>.clearEachFrame`, default false for existing native packs.
+Requested owned images clear once before SETUP/BEGIN; persistent images retain
+contents, allocation clears are reused, and same-frame reentry preserves writes.
+Actual multiframe Vulkan proof changed from 94 wrong values to zero mismatches
+across 109 values: 1D/2D/3D, persistent storage and BEGIN/COMPOSITE preservation.
+See `2026-11-05-image-frame-clear.md` and
+`build/verification/image-clear-2026-11-05/runtime-green/image-clear-result.json`.
+Root/converter test/build and Rust portable tests pass. The expensive optional
+whole-ZIP compilation was intentionally not repeated for this bounded change.
+Existing Eclipse reports remain historical; no full Eclipse readiness claim.
+Preserve earlier uncommitted work. No installed JAR/commit/publish/Android export.
+
+## Latest: sampled world depth, 2026-11-05
+
+Read `2026-11-05-sampled-depth.md`. The owner's task remains full Eclipse on
+GreenMarine; it is NOT achieved. Preserve all earlier uncommitted work.
+The converter now maps `depthtex0/gdepthtex`, `depthtex1`, and `depthtex2` to
+owned forward-depth R32F snapshots. Raster/world/compute share these inputs,
+cleared every frame and captured after opaque/world drawing. Native producer
+validation, selected scheduling, nearest sampling and lifetime cleanup are wired.
+Resource-free compute dispatches now follow current/resized viewport dimensions.
+
+Actual RX 9070 XT Vulkan readback passes all 810000 pixels: initialized early
+depth, independent terrain opaque reference, real host D32 depth, deferred,
+composite, water and compute sampling. It observes 166015 water witnesses and
+166001 world/opaque differences, with zero mismatches/invalid values/cutout leaks.
+Public depth producers become unavailable on pack switch and failed initialization.
+The controlled terrain fixture clears particles, removes other entities and hides
+the HUD/hand; this is separate from complete original hand/entity execution.
+Evidence: `build/verification/sampled-depth-2026-11-05/runtime-cleanup/`.
+
+Root 477 tests/build and converter 192 tests/build (with actual owner-ZIP tests)
+pass, with 13 and one explicit skips respectively. Rust remains 17 passing and
+14 ignored. Independent review identified draw argument order and missing compute
+viewport state; both reproduced failures and now pass. A headless optional-feature
+test also ensures packs without depth inputs do not require extra GPU support.
+
+Latest regenerated original ZIP workspace:
+`build/verification/sampled-depth-2026-11-05/eclipse`.
+`eclipse-verification.json` verifies all 757 preserved original files byte-for-byte,
+434 core compiled stages, no preprocessing/link failures, and no native stage
+compile failures. All five candidates now have real depth bindings and no old
+depth sampler blocker. All five remain non-executable. The world0 candidate still
+has 386 requirements: host uniforms, other samplers/resources, render state,
+entity/hand/shadow adapters and dimension dispatch. The 42 optional integration
+stage failures remain. No selectable Eclipse manifest was generated.
+
+Next: original nonterrain/entity/hand inputs and dispatch, original shadow passes,
+remaining texture/format/mip/clear/state and dimension/option execution; full
+Eclipse fixed-scene/movement acceptance is still outstanding. The current host
+draws hand after world postprocessing, so both opaque snapshots share its world
+boundary; do not claim original Iris hand-depth parity yet. RT stays deferred.
+Use a stable copy of the renderer JAR for a long converter suite, or finish root
+JAR builds first: rewriting a dependency JAR during a converter test run caused
+a transient missing GraphicsSpirv class; the isolated full rerun passed in 9m39s.
+No commit, publish, installed game JAR replacement or Android release export.
+
+## Latest: forward fragment depth, 2026-11-05
+
+Read `2026-11-05-fragment-depth.md` before resuming. The generic converter now
+adapts source forward gl_FragCoord/gl_FragDepth to actual host reversed Vulkan
+depth in terrain and fullscreen programs. Source returns, helpers, conservative
+depth qualifiers, invariant metadata and comments are preserved. Static compiler
+write detection avoids adding depth writes to coordinate-only/read-only shaders.
+Named world outputs distinguish built-in depth from color attachments.
+
+Actual regenerated-fixture acceptance passes 345835 independent terrain-depth
+checks, 189299 actual D32_FLOAT host-depth checks and 810000 exact fullscreen
+proof pixels, with zero mismatches/nonfinite values/cutout leaks and both cleanup
+checks passing. Independent review has no remaining Important/Critical findings.
+The final whole-owner-ZIP regeneration preserves 757 original files and all
+434 core stages compile. All five candidates now emit three terrain programs;
+none is executable. Root 471 tests/build and converter 191 tests/build (including
+the actual owner-ZIP optional tests) pass; Rust 17 portable tests pass. The latest
+workspace is `build/verification/fragment-depth-2026-11-05/eclipse-final`.
+Full evidence and remaining requirements are in the continuation ledger.
+Preserve all earlier uncommitted work.
+
+Next: real phase-correct forward sampled depthtex0/1/2 snapshots, then original
+entity/hand/shadow and remaining resource/dimension/option execution. RT remains
+deferred; no installed game JAR, commit, publish or Android export was changed.
+
+## Latest: native intermediate world stages, 2026-11-05
+
+Read `2026-11-05-world-stages.md` before resuming. Manifest-owned ordinary world
+programs and the generic converter now support geometry/tessellation through the
+existing actual host Vulkan stage path. Intermediate sources/includes snapshot
+transactionally, stage-only uniforms receive exact ABI validation and unsupported
+input primitives remain blocked. The editor/project/reload validators recognize
+and validate gsh/tcs/tes. Three real-world regenerated fixture probes pass 797767
+exact stage-proof pixels, including TCS output 4 with host input 3. Root 470 and
+converter 179 tests/build pass; Rust 17 pass. Independent reviews have no outstanding
+Important/Critical findings. Preserve all earlier uncommitted work.
+
+Latest full owner-ZIP workspace:
+`build/verification/world-stages-2026-11-05/eclipse-converted`. All 434 core stages
+compile and 757 preserved files match the original archive. The old intermediate
+world-stage blocker is absent. All five candidates remain non-executable: forward
+fragment-depth requirements now also show on `gbuffers_terrain`; original entity/
+hand/shadow, resource/state and dimension/option requirements remain. Do not claim
+full Eclipse readiness from these fixtures. Next: generic forward fragment-depth
+adaptation and actual depth aliases. RT stays deferred; no installed game JAR,
+commit, publish or Android export was changed/performed.
+
+## Latest: native raster terrain conversion, 2026-11-05
+
+Read `2026-11-05-native-terrain-converter.md` before resuming. Automatic conversion
+now emits actual vanilla solid/cutout/water programs, material capture activation
+and source-correct AO/alpha variants. Real Vulkan world readback and 5040 generated
+adapter vertex checks pass. Full Eclipse remains non-runnable: implicit unsupported
+host fallbacks, depth, entity/shadow, intermediate world stages and dimension/
+resource requirements stay explicit. Root465/converter175 tests pass. RT additions
+remain deferred until the original raster effects execute. Preserve the existing
+uncommitted work and installed game instances.
+The latest full owner-ZIP workspace is
+`build/verification/raster-continuation-2026-11-05/eclipse-converted`: 434 core
+stages compile, 42 optional integration stages fail, and all five native world
+candidates remain non-executable. Source preservation passed 757 byte comparisons.
+
+## Latest: automatic converter continuation, 2026-11-05
+
+Read `2026-11-05-automatic-converter.md` before resuming. The owner explicitly
+requires an automatic converter reusable for other packs, full Eclipse effects,
+then separately controlled GreenMarine RT. Do not hand-patch generated Eclipse.
+An automatically generated unrelated multipass pack now passes real Vulkan
+readback (810000 pixels, three passes, preserved source vertex logic). This is
+not full Eclipse acceptance. Root461/converter168 tests pass; generated terrain
+adapter runtime rerun and automatic world-program integration are next.
+
+## Current continuation: 2026-11-04 (PC linked worktree)
+
+The live interrupted-work checkout is `/home/koper/Projekty/greenmarine-dev`,
+branch `main-development`. Continue the existing Eclipse conversion, not the
+older release work below. Read `2026-11-04-continuation.md` for the recovered
+session, reproduced failures, fixes, test results and remaining scope.
+
+Current changes enable vanilla terrain sidecar capture and fix its worker GPU
+retirement, compiler/model/pack generation and exceptional compilation cleanup.
+Fresh RX 9070 XT Vulkan readback verifies four signed sections, 1408 vertices,
+water/slopes, material IDs, tint/AO and byte-identical GPU upload. Current Vulkan
+world MRT passes two and eight named attachments; graphics stages pass geometry
+and tessellation with intermediate-only uniforms and depth/no-depth variants.
+Root and converter Java tests/build and portable Rust tests passed. The legacy
+Fullpack dependency JARs are unavailable; no Android artifact was exported.
+
+Next: bind sidecars to actual converted terrain draws by semantic input name,
+then continue entity inputs/shadow passes. Full Eclipse remains runtimeReady=false.
+Preserve the large pre-existing uncommitted diff and installed game instances.
+Do not commit, export or replace installed game JARs without applicable scope.
+
 Updated 2026-10-15 for 0.7.0-prototype. This file preserves the
 owner's next direction across sessions. Read the current source before treating
 any historical report as a new bug.

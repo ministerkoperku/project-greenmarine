@@ -48,7 +48,7 @@ class PlayerReflectionGeometryTest {
         assertTrue(builder.add(cube(0,false),new Matrix4f().translation(10,2,-3).rotateY((float)Math.PI/2).scale(.9375f)));
         var data=builder.data();
         assertEquals(4624,data.remaining());assertEquals(1,data.getFloat(0));assertTrue(data.isReadOnly());
-        var inverse=new Matrix4f().set(16,data);
+        var inverse=ActorPayloadTestData.matrix(data,16);
         var raw=inverse.transformPosition(new Vector3f(10,2,-3.9375f));
         assertEquals(16,raw.x,1e-4);assertEquals(0,raw.y,1e-4);assertEquals(0,raw.z,1e-4);
         assertEquals(-4,data.getFloat(80));assertEquals(-8,data.getFloat(84));assertEquals(4,data.getFloat(96));
@@ -73,8 +73,8 @@ class PlayerReflectionGeometryTest {
                 int face=axis*2+(coordinate>center?1:0);
                 for(var vertex:polygon.vertices()) {
                     var point=new Vector4f(vertex.x(),vertex.y(),vertex.z(),1);
-                    assertEquals(vertex.u(),new Vector4f().set(112+face*16,data).dot(point),1e-5);
-                    assertEquals(vertex.v(),new Vector4f().set(208+face*16,data).dot(point),1e-5);
+                    assertEquals(vertex.u(),ActorPayloadTestData.vector(data,112+face*16).dot(point),1e-5);
+                    assertEquals(vertex.v(),ActorPayloadTestData.vector(data,208+face*16).dot(point),1e-5);
                 }
             }
         }

@@ -42,7 +42,9 @@ public abstract class GameRendererMixin {
         com.koper.greenmarine.client.rt.RayWorld.captureProjection(projection);
         GreenPostEffect.captureProjection(projection);
         PackRenderer.captureProjection(projection);
+        com.koper.greenmarine.client.world.WorldPrograms.beginFrameInputs((GameRenderer)(Object)this,projection);
         com.koper.greenmarine.client.rt.RayWorld.renderFrame((GameRenderer)(Object)this);
+        PackRenderer.beginWorldFrame((GameRenderer)(Object)this);
         com.koper.greenmarine.client.world.WorldPrograms.prepare((GameRenderer)(Object)this,projection);
         return projection;
     }

@@ -46,6 +46,31 @@ public final class RenderSession implements AutoCloseable {
         try { var view = device.createTextureView(texture); textures++; return new TextureHandle(scope, com.koper.greenmarine.client.ComputeBackend.storage(texture), view); }
         catch (RuntimeException | Error e) { texture.close(); throw e; }
     }
+    /** A real single-mip 3D sampled/storage image. Clear it or write every voxel before sampling. */
+    public TextureHandle storageVolume(String label, VolumeSpec spec) {
+        scope.check();
+        var texture = com.koper.greenmarine.client.HostImages.create(device, label, spec);
+        try { var view = device.createTextureView(texture); textures++; return new TextureHandle(scope, texture, view); }
+        catch (RuntimeException | Error e) { texture.close(); throw e; }
+    }
+    /** Initialize or reset every voxel, outside a render pass. */
+    public void clearVolume(CommandEncoder encoder, TextureHandle volume) {
+        scope.check(); volume.requireOwner(scope);
+        if (!volume.volume()) throw new IllegalArgumentException("Expected a volume image");
+        com.koper.greenmarine.client.HostImages.clear(encoder, volume.texture());
+    }
+    /** Single-mip 1D sampled/storage image, for tables addressed by image1D/sampler1D. */
+    public TextureHandle storageLine(String label, com.mojang.renderpearl.api.GpuFormat format, int width) {
+        scope.check();
+        var texture = com.koper.greenmarine.client.HostImages.createLine(device, label, format, width);
+        try { var view = device.createTextureView(texture); textures++; return new TextureHandle(scope, texture, view); }
+        catch (RuntimeException | Error e) { texture.close(); throw e; }
+    }
+    public void clearStorageImage(CommandEncoder encoder, TextureHandle image) {
+        scope.check(); image.requireOwner(scope);
+        if (image.dimensions() == 2) encoder.clearColorTexture(image.texture(), new org.joml.Vector4f());
+        else com.koper.greenmarine.client.HostImages.clear(encoder, image.texture());
+    }
     /** Zero-filled, copyable GPU buffer usable as a {@code buffer} block; extra host usage (vertex, index, uniform) may be added. */
     public BufferHandle storageBuffer(String label, long size, int extraUsage) {
         scope.check(); vulkan();
@@ -80,7 +105,8 @@ public final class RenderSession implements AutoCloseable {
         scope.check(); var vk = vulkan(); bindings.program.check();
         var limits = com.koper.greenmarine.client.ComputeBackend.limits(vk);
         if (groupsX < 1 || groupsY < 1 || groupsZ < 1 || groupsX > limits.maxGroupCount()[0] || groupsY > limits.maxGroupCount()[1] || groupsZ > limits.maxGroupCount()[2])
-            throw new IllegalArgumentException("Workgroup count outside device limits");
+            throw new IllegalArgumentException("Workgroup count " + groupsX + "x" + groupsY + "x" + groupsZ
+                + " outside device limits " + java.util.Arrays.toString(limits.maxGroupCount()));
         com.koper.greenmarine.client.ComputeBackend.dispatch(encoder, bindings.program.pipeline(), bindings.resolve(), groupsX, groupsY, groupsZ);
         dispatches++;
     }
@@ -98,6 +124,7 @@ public final class RenderSession implements AutoCloseable {
     public ProgramHandle compile(ShaderProgram definition) {
         scope.check();
         boolean vulkan = device.getDeviceInfo().backendName().equalsIgnoreCase("Vulkan");
+        com.koper.greenmarine.client.GraphicsStageFeatures.require(com.koper.greenmarine.client.ComputeBackend.vulkan(device),definition);
         if (!definition.storage().isEmpty()) {
             if (!vulkan) throw new UnsupportedOperationException("Raster storage bindings require the Vulkan backend");
             var kinds = new LinkedHashMap<String, com.koper.greenmarine.client.RasterStorage.Kind>();

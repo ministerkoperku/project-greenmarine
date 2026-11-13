@@ -30,6 +30,11 @@ API; they do not load in Iris or OptiFine.
    bloom, then composition with tone mapping, optional temporal history and dither.
 
 Entities, block entities, particles, rain, hand and GUI keep their host shaders.
+Solstice adds nearby held, dropped and burning-source light to ordinary entity
+block-light coordinates, including with ray lighting Off. Vanilla skylight and
+emissive brightness are preserved. This is an unoccluded lightmap contribution,
+not colored directional RT lighting on entities; block entities and the
+first-person hand do not use this receiver hook.
 
 ## Lighting
 
@@ -53,6 +58,12 @@ Entities, block entities, particles, rain, hand and GUI keep their host shaders.
   Emitting blocks present in this source table are integrated once: their emissive
   mesh is not added again by the sparse GI rays. Unrepresented/external emitters
   retain the GI emission fallback.
+  Static emitter sections are refreshed after chunk/block notifications and
+  availability changes, with at most four section extractions per refresh.
+  Unchanged render frames reuse the source list; a tick, camera-block transition
+  or notification permits another refresh. Dense initial emitter populations
+  can take multiple refreshes to fill. Visibility rays test obstacles all the
+  way to each light, excluding the source block's own emitting surfaces.
 - **Diffuse GI** uses four fixed cosine-distributed directions around the normal.
   The directions do not depend on position, so lighting is stable while the camera
   moves. A miss adds no sky radiance: terrain already supplies sky ambient using
@@ -85,8 +96,13 @@ Entities, block entities, particles, rain, hand and GUI keep their host shaders.
   selecting a terrain pixel does not multiply its haze brightness.
 - **Sun highlight and relief.** Every surface receives a GGX sun highlight masked by
   the traced sun visibility (`specular`). `relief` turns atlas luminance into a height
-  field inside 16-texel tiles and tilts the shading normal; it fades once a texel is
+  field inside 16-texel tiles and tilts the shading normal. Symmetric height
+  differences avoid directional bias when texture/UV axes rotate, with one-sided
+  samples at tile/alpha boundaries. It fades once a texel is
   smaller than a pixel. Both are procedural, not resource pack material maps.
+  Direct sun/moon illumination also respects the geometric face orientation:
+  a tilted shading normal cannot light the back of an opaque face. Authored PBR
+  normals, ambient and block lighting retain their existing paths.
 - **Fallback shadows.** Without hardware RT, the terrain program can trace one sun
   ray through a local 32x32x32 voxel snapshot (Voxel mode, or Auto/Hardware at
   High/Ultra when hardware is unavailable). Full opaque cells occlude; slabs,
@@ -161,7 +177,7 @@ The pack's Reset button restores defaults.
 | `wetness`, `puddles`, `terrainRoughness`, `snow`, `emission` | Weather response and material accents |
 | `volumetric`, `occlusion`, `specular`, `relief` | Ray-traced sun shafts, traced ambient occlusion, sun highlight on every surface, texture relief |
 | `weather` | Sky mood: 0 auto (each in-game day clear to overcast), 1 clear, 2 hazy, 3 cloudy, 4 overcast |
-| `surfaceDiagnostic` | Debug views: capture normals (1), albedo (2), native ray acceptance (3), traced occlusion (4), sunlit ray fraction (5), raw reflection hits and sun visibility (6) or water wave height (7) |
+| `surfaceDiagnostic` | Debug views: capture normals (1), albedo (2), native ray acceptance (3), traced occlusion (4), sunlit ray fraction (5), raw reflection hits and sun visibility (6) water wave height (7), height-field visibility (8), PBR classification (9), or lighting inputs (10: red vertex shade, green skylight, blue sun cosine) |
 
 ## Temporal history
 
@@ -172,6 +188,10 @@ previous colour is fetched from the validated nearest texel. After a lighting
 update the accepted colour difference is wider for about 45 ms and fades out by
 90 ms. This is bounded accumulation without projection jitter, not TAA or an
 upscaler. History resets on resize, resource reload and pack changes.
+Albedo matching uses each channel's RGBA16F capture precision, so a bright
+channel cannot admit changes in a dark one and neighboring texture texels do
+not borrow each other's previous final color. Filtered texture movement can
+reject history more often; same-albedo lighting reuse remains available.
 
 ## Binding contract
 

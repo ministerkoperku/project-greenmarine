@@ -12,8 +12,8 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 /** Render-thread snapshots of the local body, including first-person and optional KAvatar views.
- * Skin views may be borrowed or owned atlas views: retain the Snapshot until its GPU submission completes;
- * never close its skin. Extended snapshots add the nearest living entities' animated models after the
+ * Retain the Snapshot until its GPU submission completes, then close it to return its payload slot;
+ * never close its borrowed skin. Extended snapshots add the nearest living entities' animated models after the
  * player; armor, capes, held items and non-cube models are absent.
  */
 public final class PlayerReflection {
@@ -22,7 +22,22 @@ public final class PlayerReflection {
     public static final int EXTENDED_BYTES=PlayerReflectionGeometry.EXTENDED_BYTES;
     public static final int EXTENDED_MAX_BOXES=PlayerReflectionGeometry.EXTENDED_MAX_BOXES;
     private static final ActorAtlas ATLAS=new ActorAtlas();
-    public record Snapshot(ByteBuffer data,GpuTextureView skin,int boxes) {}
+    private static ActorPayloads payloads;
+    private static final PlayerReflectionGeometry.Builder BODY=new PlayerReflectionGeometry.Builder(),
+        DRESSED=new PlayerReflectionGeometry.Builder(EXTENDED_MAX_BOXES),ENTITIES=new PlayerReflectionGeometry.Builder(EXTENDED_MAX_BOXES);
+    private static final ByteBuffer EMPTY=ByteBuffer.allocateDirect(BYTES).asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+    private static final ByteBuffer EMPTY_EXTENDED=ByteBuffer.allocateDirect(EXTENDED_BYTES).asReadOnlyBuffer().order(ByteOrder.nativeOrder());
+    public record Snapshot(ByteBuffer data,GpuTextureView skin,int boxes,AutoCloseable retention) implements AutoCloseable {
+        public Snapshot(ByteBuffer data,GpuTextureView skin,int boxes) {this(data,skin,boxes,null);}
+        @Override public void close() {
+            if(retention!=null)try {retention.close();}catch(RuntimeException error){throw error;}catch(Exception error){throw new IllegalStateException(error);}
+        }
+    }
+    public record MemoryStats(int nativeSlots,int activeSlots,long payloadBytes) {}
+    public static MemoryStats memoryStats() {
+        int slots=payloads==null?0:payloads.allocations();
+        return new MemoryStats(slots,payloads==null?0:payloads.active(),(long)slots*EXTENDED_BYTES);
+    }
     private static volatile String detail="Local player reflection has not been captured";
     private static final int ENTITY_LIMIT=8;
     private static final double ENTITY_RADIUS=32;
@@ -32,20 +47,25 @@ public final class PlayerReflection {
     public static String detail() {return detail;}
     private PlayerReflection() {}
     /** Render thread only, after RayWorld has drained submissions retaining the owned atlas. */
-    public static void close() {ATLAS.close();}
+    public static void close() {if(payloads!=null)payloads.close();payloads=null;ATLAS.close();}
     private static final class Models {
         static final PlayerModel WIDE=create(false),SLIM=create(true);
         private static PlayerModel create(boolean slim) {
             return new PlayerModel(LayerDefinition.create(PlayerModel.createMesh(CubeDeformation.NONE,slim),64,64).bakeRoot(),slim);
         }
     }
-    private static Snapshot empty(String reason,boolean extended) {detail=reason;traced=java.util.Set.of();return new Snapshot(sized(new PlayerReflectionGeometry.Builder().data(),extended),null,0);}
+    private static Snapshot empty(String reason,boolean extended) {detail=reason;traced=java.util.Set.of();return new Snapshot((extended?EMPTY_EXTENDED:EMPTY).duplicate().order(ByteOrder.nativeOrder()),null,0);}
+    private static Snapshot publish(ByteBuffer data,GpuTextureView skin,int boxes,boolean extended) {
+        if(payloads==null)payloads=new ActorPayloads(8);
+        var lease=payloads.copy(data,extended?EXTENDED_BYTES:BYTES);
+        return new Snapshot(lease.data(),skin,boxes,lease);
+    }
     /** Legacy 16-box payloads are zero-padded for the extended ABI; never truncated. */
     static ByteBuffer sized(ByteBuffer data,boolean extended) {
         int bytes=extended?EXTENDED_BYTES:BYTES;
         if(data.remaining()==bytes)return data;
         if(data.remaining()>bytes)throw new IllegalArgumentException("Actor payload exceeds the selected ABI");
-        var out=ByteBuffer.allocateDirect(bytes).order(ByteOrder.nativeOrder());out.put(data.duplicate()).clear();
+        var out=ByteBuffer.allocate(bytes).order(ByteOrder.nativeOrder());out.put(data.duplicate()).clear();
         return out.asReadOnlyBuffer().order(ByteOrder.nativeOrder());
     }
 
@@ -57,7 +77,7 @@ public final class PlayerReflection {
     }
     /** Appends the nearest visible living entities that fit the extended box budget whole. */
     private static PlayerReflectionKAvatar.Result withEntities(Minecraft client,PlayerReflectionKAvatar.Result actor,int originX,int originY,int originZ) {
-        var builder=new PlayerReflectionGeometry.Builder(actor.data(),actor.boxes(),EXTENDED_MAX_BOXES);
+        var builder=ENTITIES.copyFrom(actor.data(),actor.boxes());
         var spans=new java.util.ArrayList<>(actor.textures());var ids=new java.util.HashSet<Integer>();ids.add(client.player.getId());
         var camera=client.gameRenderer.mainCamera().position();
         var nearby=new java.util.ArrayList<net.minecraft.world.entity.LivingEntity>();
@@ -127,16 +147,16 @@ public final class PlayerReflection {
                 if(extendedActors)custom=withEntities(client,custom,originX,originY,originZ);else traced=java.util.Set.of(client.player.getId());
                 var atlas=ATLAS.prepare(client,custom);
                 detail=custom.detail()+(custom.textures().stream().map(PlayerReflectionKAvatar.TextureSpan::texture).distinct().count()>1?"; combined texture atlas":"");
-                return new Snapshot(sized(atlas.data(),extendedActors),atlas.skin(),custom.boxes());
+                return publish(atlas.data(),atlas.skin(),custom.boxes(),extendedActors);
             }
             var texture=client.getTextureManager().getTexture(state.skin.body().texturePath());
             var skin=texture==null?null:texture.getTextureView();
             if(skin==null || skin.isClosed() || skin.texture().isClosed()) return empty("Player skin texture is not ready",extendedActors);
-            var geometry=PlayerReflectionGeometry.capture(model.root(),pose);
+            var geometry=PlayerReflectionGeometry.capture(model.root(),pose,BODY);
             if(geometry.count()==0) return empty("No valid visible player cubes",extendedActors);
             detail="Local player: "+geometry.count()+" animated skin boxes";
             if(extendedActors) {
-                var dressed=new PlayerReflectionGeometry.Builder(geometry.data(),geometry.count(),EXTENDED_MAX_BOXES);
+                var dressed=DRESSED.copyFrom(geometry.data(),geometry.count());
                 var spans=new java.util.ArrayList<PlayerReflectionKAvatar.TextureSpan>();
                 spans.add(new PlayerReflectionKAvatar.TextureSpan(state.skin.body().texturePath(),0,geometry.count()));
                 int armor=ArmorReflection.append(client,dressed,spans,renderer,state,pose);
@@ -145,11 +165,11 @@ public final class PlayerReflection {
                 var all=withEntities(client,body,originX,originY,originZ);
                 if(all.boxes()>geometry.count()) {
                     var atlas=ATLAS.prepare(client,all);detail=all.detail();
-                    return new Snapshot(sized(atlas.data(),true),atlas.skin(),all.boxes());
+                    return publish(atlas.data(),atlas.skin(),all.boxes(),true);
                 }
             }
             traced=java.util.Set.of(client.player.getId());
-            return new Snapshot(sized(geometry.data(),extendedActors),skin,geometry.count());
+            return publish(geometry.data(),skin,geometry.count(),extendedActors);
         } catch(RuntimeException | LinkageError unavailable) {
             // Optional host/model/skin availability must never reuse a stale player's body.
             return empty("Local player capture unavailable: "+unavailable.getClass().getSimpleName()+": "+unavailable.getMessage(),extendedActors);

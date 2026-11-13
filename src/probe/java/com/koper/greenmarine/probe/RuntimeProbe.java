@@ -50,6 +50,7 @@ public final class RuntimeProbe implements ClientModInitializer {
         client.options.pauseOnLostFocus = false;
         if(Boolean.getBoolean("greenmarine.probe.world") && PackRenderer.failed()) WorldLightingProbe.abort(client,OUTPUT);
         if (stage!=18 && PackRenderer.failed()
+            && !(Boolean.getBoolean("greenmarine.probe.mrt") && MrtProbe.expectsShaderFailure())
             && !(Boolean.getBoolean("greenmarine.probe.hardware_rt") && HardwareRtProbe.expectsShaderFailure())) {
             failed = true; GreenMarine.LOGGER.error("Probe detected a failed shaderpack renderer");
         }
@@ -102,10 +103,13 @@ public final class RuntimeProbe implements ClientModInitializer {
             }
         }
         if (client.level == null) return;
+        if(Boolean.getBoolean("greenmarine.probe.image_clear")) {ImageClearProbe.tick(client,OUTPUT);return;}
         if (client.player != null) client.player.input = new net.minecraft.client.player.ClientInput();
         if (screen != null && (name.equals("PauseScreen") || name.equals("DemoIntroScreen") || (client.isDemo() && name.equals("PopupScreen")))) {
             client.gui.setScreen(null);
         }
+        if(Boolean.getBoolean("greenmarine.probe.solstice_repair")) {SolsticeRepairProbe.tick(client,OUTPUT);return;}
+        if(Boolean.getBoolean("greenmarine.probe.entity_light")) {EntityLightProbe.tick(client,OUTPUT);return;}
         if(Boolean.getBoolean("greenmarine.probe.daylight")) { DaylightProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.cave")) { CaveProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.grass_motion")) { GrassMotionProbe.tick(client,OUTPUT); return; }
@@ -121,6 +125,15 @@ public final class RuntimeProbe implements ClientModInitializer {
         if(Boolean.getBoolean("greenmarine.probe.distant")) { DistantProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.near_reflection")) { NearReflectionProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.hardware_rt")) { HardwareRtProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.graphics_stages")) { GraphicsStagesProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.automatic_import")) { AutomaticImportProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.automatic_terrain")) { AutomaticTerrainProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.terrain_attributes")) { TerrainAttributesProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.volume")) { VolumeProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.world_mrt")) { WorldMrtProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.mrt")) { MrtProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.uniform_copy")) { UniformCopyProbe.tick(client,OUTPUT); return; }
+        if(Boolean.getBoolean("greenmarine.probe.microgrid")) { MicroGridProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.compute")) { ComputeProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.render_api")) { RenderApiProbe.tick(client,OUTPUT); return; }
         if(Boolean.getBoolean("greenmarine.probe.voxel")) { VoxelRuntimeProbe.tick(client,OUTPUT); return; }

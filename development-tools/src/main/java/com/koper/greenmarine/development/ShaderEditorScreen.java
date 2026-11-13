@@ -68,7 +68,7 @@ public final class ShaderEditorScreen extends Screen {
         if(!isImage(path)&&!path.endsWith("/.empty")){var doc=project.open(path);text=doc.text();baseline=doc.baseline();}
         else text=baseline="";
         language=path.endsWith(".slang")?ShaderCompiler.Language.SLANG:ShaderCompiler.Language.GLSL;
-        stage=path.endsWith(".vsh")?ShaderCompiler.Stage.VERTEX:path.endsWith(".csh")||path.endsWith(".comp")?ShaderCompiler.Stage.COMPUTE:ShaderCompiler.Stage.FRAGMENT;
+        stage=ShaderCompiler.Stage.forPath(path);
         contextChoices=ShaderCompletions.projectChoices(project);
     }
     private void remember(){

@@ -12,8 +12,15 @@ No Minecraft process or installed mod is required for this tool. Run:
 Or invoke the Java main class using lib/* as the classpath.
 Source archives/directories remain unchanged. Original files and license notices
 are preserved under iris-source/. Review IMPORT-REPORT.md before using the result.
-Successful translation creates an editable GreenMarine fullscreen effect. It is
-not full Iris compatibility. Complex/world/multiple-buffer packs are preserved
-for manual conversion and are not falsely published as selectable packs.
+Whole-program conversion emits linked editable GLSL, successful SPIR-V stages,
+and conversion/pipeline.json with typed resources, bindings, dimensions, options
+and separate preprocessing/link/compile coverage. Disabled and failed programs
+remain explicit, and original source and licenses stay preserved.
+
+A supported single fullscreen effect can also receive a selectable GreenMarine
+manifest. Whole Iris scene/shadow pipeline execution, host uniforms, materials,
+resource transitions and option/profile behavior still require runtime integration.
+Complex packs have runtimeReady=false and no selectable whole-pack manifest.
+The bundled Gson JAR supports pipeline metadata; no Minecraft runtime is required.
 
 See IRIS-IMPORT.md for the supported subset, limits and platform requirements.

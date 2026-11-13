@@ -50,12 +50,30 @@ vec3 solReliefNormal(vec3 normal,vec3 position,vec2 uv,float strength) {
     }
     strength*=footprint;
     if(strength<=0.0) return normal;
-    ivec2 texel=ivec2(floor(uv*size)),local=texel&15;
-    int dx=local.x<15?1:-1,dy=local.y<15?1:-1;
+    ivec2 texel=clamp(ivec2(floor(uv*size)),ivec2(0),ivec2(size)-ivec2(1)),local=texel&15;
     float height=solTexelHeight(texel);
     if(height<0.0) return normal;
-    float hx=solTexelHeight(texel+ivec2(dx,0)),hy=solTexelHeight(texel+ivec2(0,dy));
-    vec2 gradient=vec2((hx<0.0?0.0:hx-height)*float(dx),(hy<0.0?0.0:hy-height)*float(dy));
+    // Symmetric differences preserve the same physical normal when texture and
+    // UV axes rotate together. One-sided +texel slopes flattened some rotations.
+    // Tile edges and transparent neighbors use only available opaque samples.
+    vec2 gradient=vec2(0),span=vec2(0);
+    if(local.x>0) {
+        float h=solTexelHeight(texel-ivec2(1,0));
+        if(h>=0.0) {gradient.x+=height-h;span.x+=1.0;}
+    }
+    if(local.x<15 && texel.x+1<int(size.x)) {
+        float h=solTexelHeight(texel+ivec2(1,0));
+        if(h>=0.0) {gradient.x+=h-height;span.x+=1.0;}
+    }
+    if(local.y>0) {
+        float h=solTexelHeight(texel-ivec2(0,1));
+        if(h>=0.0) {gradient.y+=height-h;span.y+=1.0;}
+    }
+    if(local.y<15 && texel.y+1<int(size.y)) {
+        float h=solTexelHeight(texel+ivec2(0,1));
+        if(h>=0.0) {gradient.y+=h-height;span.y+=1.0;}
+    }
+    gradient=gradient/max(span,vec2(1));
     vec3 dpyPerp=cross(dpy,normal),dpxPerp=cross(normal,dpx);
     vec3 tangent=dpyPerp*duvx.x+dpxPerp*duvy.x,bitangent=dpyPerp*duvx.y+dpxPerp*duvy.y;
     float scale=inversesqrt(max(max(dot(tangent,tangent),dot(bitangent,bitangent)),1e-36));
@@ -126,6 +144,10 @@ void main() {
 #elif defined(OIT_ALPHA_ONLY)
     executeAlphaOnlyPhase(gl_FragCoord.z,color.a);
 #else
+    // RGB: vertex tint/ambient shade, host skylight coordinate, perturbed sun cosine.
+    if(abs(marineParameter(SOL_SURFACE_DEBUG)-10.0)<.5) {
+        fragColor=vec4(solLuma(surfaceColor.rgb),surfaceLight.y,max(dot(shading,SurfaceSun.xyz),0.0),1);return;
+    }
     vec2 uv=gl_FragCoord.xy/Frame.xy;
     vec3 view=normalize(SurfaceEye.xyz-surfacePosition);
     vec3 reflected=reflect(-view,normal);
@@ -146,10 +168,10 @@ void main() {
             vec3 reason=vec3(0,solRayCoverage(surfacePosition),gathered?support:0.0);
             if(floor(capturedMaterial.a+.0001)!=expectedClass) reason=vec3(1,1,0);
             // Normal mismatch split: orange slightly off (precision), white a different face,
-            // cyan the same plane facing the other way.
+            // magenta the same plane facing the other way (cyan also means full coverage/support).
             else if(dot(captured.xyz,normal)<=.95) {
                 float agreement=dot(captured.xyz,normal);
-                reason=agreement>.5?vec3(1,.5,0):(agreement<-.5?vec3(0,1,1):vec3(1));
+                reason=agreement>.5?vec3(1,.5,0):(agreement<-.5?vec3(1,0,1):vec3(1));
             }
             else if(!marineOpaqueSurfaceVisible(gl_FragCoord.z,captured.w)) reason=vec3(1,0,0);
             fragColor=vec4(reason,1);return;
@@ -176,8 +198,8 @@ void main() {
         if(abs(marineParameter(SOL_SURFACE_DEBUG)-8.0)<.5) {fragColor=vec4(1,columns,columns,1);return;}
     } else if(!water && abs(marineParameter(SOL_SURFACE_DEBUG)-8.0)<.5) {fragColor=vec4(.2,.2,.2,1);return;}
     float ambientOcclusion=mix(1.0,pow(clamp(occlusion,0.0,1.0),2.0),clamp(nativeCoverage*marineParameter(SOL_OCCLUSION),0.0,1.0))*solPbrOcclusion;
-    vec3 illumination=solIrradiance(shading,surfaceLight.y,0.0,sunVisibility,ambientOcclusion)
-        +solIrradiance(shading,0.0,surfaceLight.x,1.0,ambientOcclusion)*(1.0-tracedBlocks);
+    vec3 illumination=solIrradiance(shading,normal,surfaceLight.y,0.0,sunVisibility,ambientOcclusion)
+        +solIrradiance(shading,normal,0.0,surfaceLight.x,1.0,ambientOcclusion)*(1.0-tracedBlocks);
     // Native irradiance holds the traced light (sun by day, moon by night); strip exactly that.
     float tracedDirect=max(dot(normal,normalize(RaySun.xyz+vec3(0,1e-6,0))),0.0)*max(RaySun.w,0.0);
     vec3 indirect=max(nativeLight.rgb-vec3(RayOptions.x+tracedDirect*nativeLight.a),vec3(0));
@@ -186,7 +208,9 @@ void main() {
     // Snow is a climate overlay on exposed top faces, preserving atlas textures.
     float snow=Climate.y*marineParameter(SOL_SNOW)*smoothstep(.6,.98,normal.y)*smoothstep(.7,1.0,surfaceLight.y);
     lit=mix(lit,vec3(.72,.78,.83)*illumination,clamp(snow,0.0,.7));
-    float emission=pow(surfaceLight.x,9.0)*max(0.0,solLuma(base)-.35)*marineParameter(SOL_EMISSION);
+    // Emission belongs to the material. Incoming block light also illuminates ordinary
+    // sand/stone and cannot identify sources; bright lava texels need no albedo threshold.
+    float emission=0.0;
     if(pbr.present) emission=max(emission,pbr.emission*2.0*marineParameter(SOL_EMISSION)/.35);
     if(addon.a>0.0) emission=max(emission,addon.b*2.0*marineParameter(SOL_EMISSION)/.35);
     lit+=base*emission;
@@ -257,7 +281,7 @@ void main() {
     if(!water) {
         // Every surface gets a sun highlight; dielectrics use F0 0.04, metals their albedo.
         vec3 f0=pbr.present?marinePbrF0(pbr,base):(material.w==2.0?base:vec3(material.w==8.0?.17:.04));
-        lit+=solSunSpecular(shading,view,clamp(roughness*.78,.08,1.0),f0,sunVisibility*surfaceLight.y)*marineParameter(SOL_SPECULAR)*(addon.a>0.0?addon.g:1.0);
+        lit+=solSunSpecular(shading,normal,view,clamp(roughness*.78,.08,1.0),f0,sunVisibility*surfaceLight.y)*marineParameter(SOL_SPECULAR)*(addon.a>0.0?addon.g:1.0);
     }
     color.rgb=solDisplay(lit);
     // Diagnostic 9: LabPBR material read (red present, green smoothness, blue metal).

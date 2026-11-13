@@ -31,13 +31,27 @@ public final class ComputeBackend {
         final int vk;
         Kind(int vk) { this.vk = vk; }
     }
-    public record Slot(String name, int binding, Kind kind) {}
+    public record Slot(String name, int binding, Kind kind, int dimensions) {
+        public Slot(String name, int binding, Kind kind) { this(name, binding, kind, kind == Kind.STORAGE_IMAGE || kind == Kind.SAMPLED_TEXTURE ? 2 : 0); }
+    }
     public record Reflection(List<Slot> slots, int localX, int localY, int localZ) {}
     public sealed interface Bound permits BufferRange, StorageImage, SampledImage {}
     public record BufferRange(long buffer, long offset, long size) implements Bound {}
     public record StorageImage(long view) implements Bound {}
     public record SampledImage(long view, long sampler) implements Bound {}
-    public record Limits(int maxInvocations, int[] maxGroupCount, int[] maxGroupSize) {}
+    public record Limits(int maxInvocations, int[] maxGroupCount, int[] maxGroupSize) {
+        public Limits {
+            maxInvocations = javaLimit(maxInvocations);
+            if (maxGroupCount.length != 3 || maxGroupSize.length != 3) throw new IllegalArgumentException("Compute limits need three axes");
+            maxGroupCount = Arrays.stream(maxGroupCount).map(Limits::javaLimit).toArray();
+            maxGroupSize = Arrays.stream(maxGroupSize).map(Limits::javaLimit).toArray();
+        }
+        // Vulkan exposes uint32_t limits; RADV may report UINT32_MAX, which Java reads as -1.
+        private static int javaLimit(int value) {
+            if (value == 0) throw new IllegalArgumentException("Compute device limit is zero");
+            return (int) Math.min(Integer.toUnsignedLong(value), Integer.MAX_VALUE);
+        }
+    }
 
     public static final int MAX_SOURCE = 2 * 1024 * 1024, MAX_BINDINGS = 32;
     private static final Pattern INCLUDE = Pattern.compile("(?m)^[ \\t]*#include[ \\t]+[<\"]([^>\"]+)[>\"][^\\n]*$");
@@ -187,16 +201,18 @@ public final class ComputeBackend {
         check(spvc_resources_get_resource_list_for_type(resources, type, list, count), "resource list");
         var reflected = SpvcReflectedResource.create(list.get(0), (int) count.get(0));
         for (var resource : reflected) {
+            int dimensions = 0;
             if (spvc_compiler_get_decoration(compiler, resource.id(), 34) != 0) throw new IllegalArgumentException("Compute resources must use descriptor set 0: " + resource.nameString());
             if (kind == Kind.STORAGE_IMAGE || kind == Kind.SAMPLED_TEXTURE) {
                 long handle = spvc_compiler_get_type_handle(compiler, resource.type_id());
                 int dim = spvc_type_get_image_dimension(handle);
-                if (dim != 1 || spvc_type_get_image_arrayed(handle) || spvc_type_get_image_multisampled(handle)) // SpvDim2D
-                    throw new IllegalArgumentException("Only non-array 2D images are supported for now: " + resource.nameString());
+                if (dim < 0 || dim > 2 || spvc_type_get_image_arrayed(handle) || spvc_type_get_image_multisampled(handle)) // SpvDim1D / 2D / 3D
+                    throw new IllegalArgumentException("Only non-array 1D, 2D and 3D images are supported: " + resource.nameString());
+                dimensions = dim + 1;
             }
             String name = resource.nameString();
             if (name == null || name.isBlank()) throw new IllegalArgumentException("Compute resources must be named");
-            slots.add(new Slot(name, spvc_compiler_get_decoration(compiler, resource.id(), 33), kind)); // DecorationBinding
+            slots.add(new Slot(name, spvc_compiler_get_decoration(compiler, resource.id(), 33), kind, dimensions)); // DecorationBinding
         }
     }
     private static void check(int result, String step) {

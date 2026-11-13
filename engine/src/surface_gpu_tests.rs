@@ -974,6 +974,60 @@ fn surface_gpu_cave_misses_do_not_add_sky_and_actors_shadow_local_lights() {
 }
 
 #[test]
+#[ignore = "Explicit Vulkan local light endpoint occlusion regression"]
+fn surface_gpu_local_light_does_not_skip_unrelated_geometry_near_emitter() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let normal = Image::new(&host, 1, 1, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let outputs = [
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false),
+            Image::new(&host, 1, 1, vk::Format::R16G16B16A16_SFLOAT, false),
+        ];
+        host.begin();
+        normal.initialize(host.command, [0., 0., -1., 0.5]);
+        albedo.initialize(host.command, [0.4, 0.4, 0.4, 1.4]);
+        atlas.initialize(host.command, [1.; 4]);
+        for image in &outputs { image.initialize(host.command, [0.; 4]); }
+        ray.barrier(host.command);
+        host.submit();
+        let views = [atlas.view.as_raw(), normal.view.as_raw(), albedo.view.as_raw()];
+        let mut frame = identity_frame(1, 1);
+        frame[75] = 0.;
+        ray.scene(&triangle([[100., -4., -4.], [100., 4., -4.], [100., 0., 4.]], 0.)).unwrap();
+        let ambient = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        ray.set_surface_lights(&[0., 0., -1., 15., 1., 1., 1., 0.], 1).unwrap();
+        let lit = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!(lit[0][0][0] > ambient[0][0][0] + 0.3);
+        // This wall is just 0.2 blocks before a held light. It is not an emitter,
+        // even though it shares the cell containing the source position.
+        ray.scene(&triangle([[-4., -4., -0.8], [4., -4., -0.8], [0., 4., -0.8]], 0.)).unwrap();
+        let blocked = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!((blocked[0][0][0] - ambient[0][0][0]).abs() < 0.002,
+            "a real wall near a light must still occlude: ambient={:?}, lit={:?}, blocked={:?}",
+            ambient[0][0], lit[0][0], blocked[0][0]);
+        // A full emissive block's front face must still let its own source out.
+        ray.set_surface_lights(&[0.5, 0.5, -1.5, 15., 1., 1., 1., 0.], 1).unwrap();
+        ray.scene(&triangle([[0., 0., -1.], [1., 0., -1.], [0.5, 1., -1.]], 15.)).unwrap();
+        let emitter = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!(emitter[0][0][0] > ambient[0][0][0] + 0.3,
+            "an emissive block must not occlude its own source: {:?}", emitter[0][0]);
+        // A different emitting surface still casts a shadow. Its hit cell is
+        // z=-1, while the actual source belongs to z=-2.
+        ray.scene(&triangle([[-4., -4., -0.95], [4., -4., -0.95], [0., 4., -0.95]], 15.)).unwrap();
+        let other_emitter = readback(&host, &mut ray, &frame, &outputs, views, 1, 1);
+        assert!((other_emitter[0][0][0] - ambient[0][0][0]).abs() < 0.002,
+            "a different emitting block must still occlude the source: {:?}", other_emitter[0][0]);
+        println!("endpoint ambient={:?} lit={:?} blocked={:?} emitter={:?}",
+            ambient[0][0], lit[0][0], blocked[0][0], emitter[0][0]);
+    }
+}
+
+#[test]
 #[ignore = "Explicit RX 9070 XT capture/output reconstruction acceptance"]
 fn surface_gpu_half_resolution_uses_sloped_capture_texel_centres() {
     let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
@@ -1294,13 +1348,13 @@ fn surface_gpu_offscreen_reflection_shadow_odd_dimensions_and_scene_reset() {
             "coated dielectric class 9 must receive native reflection radiance"
         );
         host.begin();
-        capture_albedo.clear(host.command, [0.1, 0.2, 0.3, 1.05]);
+        capture_albedo.clear(host.command, [0.1, 0.2, 0.3, 2.05]);
         ray.barrier(host.command);
         host.submit();
-        let generic_material = readback(&host, &mut ray, &frame, &outputs, views, width, height);
+        let metal_material = readback(&host, &mut ray, &frame, &outputs, views, width, height);
         assert_eq!(
-            generic_material, clear,
-            "generic material class 1 with low roughness must keep model reflections"
+            metal_material, clear,
+            "explicit reflective metal class 2 must keep model reflections"
         );
         let mut layered_reflectors = target.to_vec();
         layered_reflectors.extend_from_slice(&triangle(
@@ -2248,7 +2302,7 @@ fn surface_gpu_external_meshes_reflect_shadow_move_and_survive_flights() {
 
         // Untextured tint mode for model textures that are not in the block atlas.
         let mut tinted = local_target;
-        tinted[14] = 2.0;
+        tinted[18] = 2.0;
         let tint_mesh = factory.prepare_mesh(&tinted).unwrap();
         ray.set_external_frame(vec![ExternalInstance {
             mesh: tint_mesh,
@@ -2315,5 +2369,52 @@ fn surface_gpu_external_meshes_reflect_shadow_move_and_survive_flights() {
             "surface_gpu external shadow={:?} moved={:?} tint={:?} flight={:?}",
             shadowed[0][center], moved[1][center], tint[1][center], leased[1][center]
         );
+    }
+}
+
+#[test]
+#[ignore = "Explicit Vulkan local-light penumbra continuity regression"]
+fn surface_gpu_local_light_penumbra_is_stable_across_receiver_basis_threshold() {
+    let _gpu_test = GPU_TEST_LOCK.lock().unwrap();
+    unsafe {
+        let host = Host::new();
+        let mut ray = RayState::new(&host.instance, &host.device, host.physical).unwrap();
+        ray.init_surface().unwrap();
+        let (width, height) = (1, 1);
+        let normal = Image::new(&host, width, height, vk::Format::R32G32B32A32_SFLOAT, true);
+        let albedo = Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, true);
+        let atlas = Image::new(&host, 1, 1, vk::Format::R8G8B8A8_UNORM, true);
+        let outputs = [Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, false), Image::new(&host, width, height, vk::Format::R16G16B16A16_SFLOAT, false)];
+        host.begin();
+        normal.initialize(host.command, [0., 1., 0., 0.5]);
+        albedo.initialize(host.command, [0.5, 0.5, 0.5, 1.4]);
+        atlas.initialize(host.command, [1.;4]);
+        for image in &outputs {image.initialize(host.command, [0.;4]);}
+        ray.barrier(host.command);host.submit();
+        ray.scene(&triangle([[100., -4., -4.], [100., 4., -4.], [100., 0., 4.]], 0.)).unwrap();
+        let views = [atlas.view.as_raw(), normal.view.as_raw(), albedo.view.as_raw()];
+        let mut frame = identity_frame(width, height);
+        frame[0]=2.;frame[5]=2.;frame[10]=-4.;
+        frame[21]=0.;frame[22]=1.;frame[25]=1.;frame[26]=0.;frame[29]=2.;
+        frame[75]=0.;frame[76]=0.02;
+        // Probe the receiver-relative emitter basis switch with one nearby hand
+        // beside a source, while the source itself is outside that box.
+        let mut hand_inverse=[0.;16];hand_inverse[15]=1.;
+        for (axis,(lo,hi)) in [(0,(0.08,0.5)),(1,(0.95,1.2)),(2,(-0.5,0.5))] {
+            hand_inverse[axis*5]=1./(hi-lo);hand_inverse[12+axis]=-lo/(hi-lo);
+        }
+        let hand=actor_box_payload(hand_inverse,false);
+        ray.set_surface_lights(&[0.,1.,0.,14.,1.25,0.74,0.32,0.],1).unwrap();
+        let radius=(1.0f32/(0.9*0.9)-1.).sqrt()/2.0f32.sqrt();
+        let mut nearby_values=Vec::new();
+        for scale in [0.9999,1.0001] {
+            frame[28]=radius*scale;frame[30]=radius*scale;
+            let values=readback_actors(&host,&mut ray,&frame,&outputs,views,width,height,Some((&hand,atlas.view.as_raw())));
+            let centre=(height/2*width+width/2) as usize;
+            println!("basis source receiver scale={scale} centre={:?}",values[0][centre]);
+            nearby_values.push(values[0][centre][0]);
+        }
+        assert!((nearby_values[0]-nearby_values[1]).abs()<0.005,
+            "an infinitesimal receiver move must not rotate the emitting samples and halve visibility: {nearby_values:?}");
     }
 }

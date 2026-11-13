@@ -41,7 +41,7 @@ class PackPassInputsTest {
             assertThrows(IllegalArgumentException.class,()->parse(SOURCE+","+consumer("{\""+sampler+"\":\"source\"}")),sampler);
         }
         var bindings=new java.util.ArrayList<String>();
-        for(int i=0;i<9;i++)bindings.add("\"Cached"+i+"\":\"source\"");
+        for(int i=0;i<33;i++)bindings.add("\"Cached"+i+"\":\"source\"");
         assertThrows(IllegalArgumentException.class,()->parse(SOURCE+","+consumer("{"+String.join(",",bindings)+"}")));
         assertThrows(IllegalArgumentException.class,()->parse(SOURCE+","+consumer("{\"Cached\":23}")));
     }

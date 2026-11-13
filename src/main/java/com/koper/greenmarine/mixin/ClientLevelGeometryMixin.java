@@ -14,6 +14,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /** Includes server-verified edits, chunk replacement and biome tint changes. */
 @Mixin(ClientLevel.class)
 public abstract class ClientLevelGeometryMixin {
+    @Inject(method="setSectionDirtyWithNeighbors",at=@At("TAIL"))
+    private void greenmarine$attachmentGeometry(int x,int y,int z,CallbackInfo ci) {RayWorld.invalidateSection(x,y,z);}
     @Inject(method="setBlocksDirty",at=@At("TAIL"))
     private void greenmarine$blockGeometry(BlockPos pos,BlockState before,BlockState after,CallbackInfo ci) {
         RayWorld.invalidateBlock(pos);

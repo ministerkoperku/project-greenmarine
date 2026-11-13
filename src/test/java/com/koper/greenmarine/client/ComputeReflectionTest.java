@@ -5,6 +5,11 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ComputeReflectionTest {
+    @Test void unsignedDeviceLimitsDoNotRejectValidDispatches() {
+        var limits = new ComputeBackend.Limits(1024, new int[]{-1, 65535, 65535}, new int[]{1024, 1024, 1024});
+        assertEquals(Integer.MAX_VALUE, limits.maxGroupCount()[0]);
+        assertEquals(65535, limits.maxGroupCount()[2]);
+    }
     @Test void reflectsBindingsByNameWithDistinctAutomaticSlots() {
         var source = """
             #version 450
@@ -35,10 +40,39 @@ class ComputeReflectionTest {
 
     @Test void rejectsUnsupportedResourcesAndBadSource() {
         assertThrows(IllegalArgumentException.class, () -> ComputeBackend.compile("test:bad", "#version 450\nvoid main() { nope(); }"));
-        var image3d = "#version 450\nlayout(local_size_x=1) in;\nlayout(rgba8) uniform image3D V;\nvoid main(){ imageStore(V, ivec3(0), vec4(1)); }";
-        assertThrows(IllegalArgumentException.class, () -> ComputeBackend.reflect(ComputeBackend.compile("test:3d", image3d)));
+        var array = "#version 450\nlayout(local_size_x=1) in;\nlayout(rgba8) uniform image2DArray V;\nvoid main(){ imageStore(V, ivec3(0), vec4(1)); }";
+        assertThrows(IllegalArgumentException.class, () -> ComputeBackend.reflect(ComputeBackend.compile("test:array", array)));
         var push = "#version 450\nlayout(local_size_x=1) in;\nlayout(push_constant) uniform P { float x; } p;\nlayout(std430) buffer B { float y; };\nvoid main(){ y = p.x; }";
         assertThrows(IllegalArgumentException.class, () -> ComputeBackend.reflect(ComputeBackend.compile("test:push", push)));
+    }
+
+    @Test void reflectsVolumeStorageAndSamplingForLpv() {
+        var source = """
+            #version 450
+            layout(local_size_x=4, local_size_y=4, local_size_z=4) in;
+            layout(rgba16f) uniform image3D NextLpv;
+            uniform sampler3D PreviousLpv;
+            void main() {
+                ivec3 p = ivec3(gl_GlobalInvocationID);
+                imageStore(NextLpv, p, texelFetch(PreviousLpv, p, 0));
+            }
+            """;
+        var reflection = ComputeBackend.reflect(ComputeBackend.compile("test:lpv", source));
+        assertEquals(2, reflection.slots().size());
+        assertEquals(Set.of("NextLpv", "PreviousLpv"), reflection.slots().stream().map(ComputeBackend.Slot::name).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(4, reflection.localZ());
+    }
+
+    @Test void reflectsOneDimensionalIntegerBlockData() {
+        var reflection = ComputeBackend.reflect(ComputeBackend.compile("test:block_data", """
+            #version 450
+            layout(local_size_x=8) in;
+            layout(rg32ui) uniform uimage1D BlockData;
+            uniform usampler1D Previous;
+            void main(){int p=int(gl_GlobalInvocationID.x);imageStore(BlockData,p,texelFetch(Previous,p,0));}
+            """));
+        assertEquals(2, reflection.slots().size());
+        assertTrue(reflection.slots().stream().allMatch(s -> s.dimensions() == 1));
     }
 
     @Test void expandsIncludesWithCycleProtection() {

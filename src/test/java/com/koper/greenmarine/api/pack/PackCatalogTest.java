@@ -54,6 +54,46 @@ class PackCatalogTest {
         assertFalse(catalog.reload(Map.of("p",valid),id -> id.endsWith("grade.fsh") ? "#include <demo:missing.glsl>" : null));
     }
 
+    @Test void declaredRootStagesDoNotConsumeTheIncludeBudget() {
+        var passes=new java.util.ArrayList<String>();
+        for(int i=0;i<256;i++) {
+            passes.add("{\"name\":\"scene"+i+"\",\"fragment\":\"demo:scene"+i+"\"}");
+            passes.add("{\"name\":\"compute"+i+"\",\"stage\":\"compute\",\"compute\":\"demo:compute"+i+"\",\"groups\":[1,1,1]}");
+        }
+        String manifest="{\"schema\":1,\"id\":\"demo:pack\",\"passes\":["+String.join(",",passes)+"]}";
+        var catalog=new PackCatalog();
+        assertTrue(catalog.reload(Map.of("many-stages",manifest),id -> id.endsWith("shared.glsl")
+            ? "shared" : "#include <demo:shared.glsl>"),catalog.error());
+        assertEquals(513,catalog.get("demo:pack").orElseThrow().sources().size());
+        assertEquals("shared",catalog.get("demo:pack").orElseThrow().sources().get("include|demo:shared.glsl"));
+    }
+
+    @Test void distinctIncludesRemainBoundedAndFailedReloadPreservesSnapshot() {
+        var catalog=new PackCatalog();
+        String includes=java.util.stream.IntStream.range(0,512)
+            .mapToObj(i -> "#include <demo:part"+i+".glsl>\n").collect(java.util.stream.Collectors.joining());
+        assertTrue(catalog.reload(Map.of("p",valid),id -> id.endsWith("grade.fsh") ? includes : "leaf"),catalog.error());
+        var previous=catalog.get("demo:pack").orElseThrow();
+        assertEquals(513,previous.sources().size());
+        assertFalse(catalog.reload(Map.of("p",valid),id -> id.endsWith("grade.fsh")
+            ? includes+"#include <demo:overflow.glsl>" : "leaf"));
+        assertTrue(catalog.error().contains("include limit"),catalog.error());
+        assertSame(previous,catalog.get("demo:pack").orElseThrow());
+    }
+
+    @Test void includeDepthAndCyclesRemainRejected() {
+        var catalog=new PackCatalog();
+        assertFalse(catalog.reload(Map.of("p",valid),id -> id.endsWith("grade.fsh")
+            ? "#include <demo:loop.glsl>" : "#include <demo:loop.glsl>"));
+        assertTrue(catalog.error().contains("Cyclic"),catalog.error());
+        assertFalse(catalog.reload(Map.of("p",valid),id -> {
+            if(id.endsWith("grade.fsh"))return "#include <demo:part0.glsl>";
+            int part=Integer.parseInt(id.substring(id.lastIndexOf("part")+4,id.lastIndexOf('.')));
+            return part==17 ? "leaf" : "#include <demo:part"+(part+1)+".glsl>";
+        }));
+        assertTrue(catalog.error().contains("include limit"),catalog.error());
+    }
+
     @Test void registeredModPacksHaveOwnedLifetimesAndSurviveResourceReload() throws Exception {
         var catalog=new PackCatalog(); var definition=ShaderPack.parse(com.google.gson.JsonParser.parseString(valid).getAsJsonObject());
         var loaded=new PackCatalog.LoadedPack(definition,"function update(f) end",Map.of("demo:core/grade","void main(){}"));

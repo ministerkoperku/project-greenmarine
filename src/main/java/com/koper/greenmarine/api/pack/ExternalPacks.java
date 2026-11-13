@@ -11,9 +11,11 @@ import java.util.zip.ZipFile;
 
 /** Bounded resource snapshots for independently editable directory or ZIP shaderpacks. */
 public final class ExternalPacks {
-    private static final int MAX_FILES = 2048;
-    private static final int MAX_PACK_BYTES = 8 * 1024 * 1024;
-    private static final int MAX_SCAN_BYTES = 32 * 1024 * 1024;
+    // Count preserved project sources as entries, but snapshot only namespaced assets.
+    // Linked multi-stage packs need room for GLSL fallbacks alongside optional SPIR-V.
+    private static final int MAX_FILES = 4096;
+    private static final int MAX_PACK_BYTES = 32 * 1024 * 1024;
+    private static final int MAX_SCAN_BYTES = 128 * 1024 * 1024;
     private ExternalPacks() {}
 
     /** Sources have private assets, then fall back to mounted engine/game resources. No GPU calls. */
@@ -36,7 +38,7 @@ public final class ExternalPacks {
                     throw new IllegalArgumentException(child.getFileName() + ": " + error.getMessage(), error);
                 }
                 for (var data : assets.values()) bytes = Math.addExact(bytes, data.length);
-                if (bytes > MAX_SCAN_BYTES) throw new IllegalArgumentException("External pack snapshot exceeds 32 MiB");
+                if (bytes > MAX_SCAN_BYTES) throw new IllegalArgumentException("External pack scan snapshot exceeds 128 MiB");
                 var snapshot = Map.copyOf(assets);
                 Function<String, String> text = id -> {
                     var data = snapshot.get(id);
@@ -74,7 +76,7 @@ public final class ExternalPacks {
                 byte[] data;
                 try (var input = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS)) { data = read(input, name); }
                 bytes += data.length;
-                if (bytes > MAX_PACK_BYTES) throw new IllegalArgumentException("Pack snapshot exceeds 8 MiB");
+                if (bytes > MAX_PACK_BYTES) throw new IllegalArgumentException("Pack snapshot exceeds 32 MiB");
                 assets.put(id, data);
             }
         }
@@ -99,7 +101,7 @@ public final class ExternalPacks {
                 byte[] data;
                 try (var input = zip.getInputStream(entry)) { data = read(input, name); }
                 bytes += data.length;
-                if (bytes > MAX_PACK_BYTES) throw new IllegalArgumentException("Pack snapshot exceeds 8 MiB");
+                if (bytes > MAX_PACK_BYTES) throw new IllegalArgumentException("Pack snapshot exceeds 32 MiB");
                 assets.put(id, data);
             }
         }

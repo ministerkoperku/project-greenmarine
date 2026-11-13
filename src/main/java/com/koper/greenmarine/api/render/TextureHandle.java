@@ -8,5 +8,9 @@ public final class TextureHandle extends OwnedResource {
     TextureHandle(ResourceScope owner, GpuTexture texture, GpuTextureView view) { super(owner); this.texture = texture; this.view = view; }
     public GpuTextureView view() { check(); return view; }
     public GpuTexture texture() { check(); return texture; }
+    /** True for a 3D image; ordinary 2D textures retain depth one. */
+    public boolean volume() { check(); return com.koper.greenmarine.client.HostImages.volume(texture); }
+    public int depth() { check(); return com.koper.greenmarine.client.HostImages.depth(texture); }
+    public int dimensions() { check(); return com.koper.greenmarine.client.HostImages.dimensions(texture); }
     @Override protected void destroy() { try { view.close(); } finally { texture.close(); } }
 }

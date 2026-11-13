@@ -10,6 +10,7 @@ import net.minecraft.resources.Identifier;
 import org.joml.Vector4f;
 import java.io.IOException;
 import java.nio.*;
+import java.lang.foreign.Arena;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
@@ -23,6 +24,9 @@ final class ActorAtlas implements AutoCloseable {
     private List<ActorAtlasPlan.Source> sources=List.of();
     private ActorAtlasPlan.Plan plan;
     private List<ByteBuffer> frames=List.of();
+    private ByteBuffer remapped;
+    private Arena uniformArena;
+    private final List<ByteBuffer> frameStorage=new ArrayList<>();
 
     Capture prepare(Minecraft client,PlayerReflectionKAvatar.Result actor) {
         var inputs=new LinkedHashMap<Identifier,Input>();
@@ -41,7 +45,14 @@ final class ActorAtlas implements AutoCloseable {
         if(!sources.equals(dimensions)) {
             plan=ActorAtlasPlan.pack(dimensions);sources=List.copyOf(dimensions);
             var next=new ArrayList<ByteBuffer>();
-            for(var source:sources)next.add(blitFrame(plan,plan.rectangles().get(source.id())));
+            if(sources.size()>PlayerReflectionGeometry.EXTENDED_MAX_BOXES)throw new IllegalArgumentException("Actor atlas source budget exceeded");
+            for(int index=0;index<sources.size();index++) {
+                if(index==frameStorage.size()) {
+                    if(uniformArena==null)uniformArena=Arena.ofShared();
+                    frameStorage.add(uniformArena.allocate(32,16).asByteBuffer().order(ByteOrder.nativeOrder()));
+                }
+                var source=sources.get(index);next.add(blitFrame(plan,plan.rectangles().get(source.id()),frameStorage.get(index)));
+            }
             frames=List.copyOf(next);
         }
         var device=RenderSystem.getDevice();
@@ -70,12 +81,17 @@ final class ActorAtlas implements AutoCloseable {
             }
         }
         // Renderpearl and the native sampler both use GENERAL; closing this pass publishes its writes.
-        var data=ByteBuffer.allocateDirect(actor.data().remaining()).order(ByteOrder.nativeOrder());data.put(actor.data().duplicate()).clear();
+        int bytes=actor.data().remaining();
+        if(remapped==null || remapped.capacity()<bytes)remapped=ByteBuffer.allocate(bytes).order(ByteOrder.nativeOrder());
+        var data=remapped.clear().limit(bytes);data.put(actor.data().duplicate()).flip();
         for(var span:actor.textures())ActorAtlasPlan.remap(data,span.first(),span.boxes(),plan.rectangles().get(span.texture().toString()),plan.width(),plan.height());
         return new Capture(data.asReadOnlyBuffer().order(ByteOrder.nativeOrder()),view);
     }
     static ByteBuffer blitFrame(ActorAtlasPlan.Plan plan,ActorAtlasPlan.Rect rectangle) {
-        var frame=ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder());int pad=ActorAtlasPlan.GUTTER;
+        return blitFrame(plan,rectangle,ByteBuffer.allocate(32).order(ByteOrder.nativeOrder()));
+    }
+    private static ByteBuffer blitFrame(ActorAtlasPlan.Plan plan,ActorAtlasPlan.Rect rectangle,ByteBuffer frame) {
+        frame.clear();int pad=ActorAtlasPlan.GUTTER;
         frame.putFloat(0,rectangle.x()-pad).putFloat(4,rectangle.y()-pad).putFloat(8,rectangle.width()+2*pad).putFloat(12,rectangle.height()+2*pad);
         frame.putFloat(16,plan.width()).putFloat(20,plan.height()).putFloat(24,rectangle.width()).putFloat(28,rectangle.height());return frame;
     }
@@ -104,6 +120,7 @@ final class ActorAtlas implements AutoCloseable {
     }
     /** Caller drains native/host submissions before reset; growth drains before replacing a view. */
     @Override public void close() {
-        closeTexture();if(compiled!=null)compiled.close();compiled=null;sources=List.of();frames=List.of();plan=null;
+        closeTexture();if(compiled!=null)compiled.close();compiled=null;sources=List.of();frames=List.of();plan=null;remapped=null;
+        if(uniformArena!=null)uniformArena.close();uniformArena=null;frameStorage.clear();
     }
 }

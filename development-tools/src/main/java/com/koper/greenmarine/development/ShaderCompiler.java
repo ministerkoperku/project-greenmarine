@@ -17,7 +17,17 @@ import static org.lwjgl.util.shaderc.Shaderc.*;
  */
 public final class ShaderCompiler {
     public enum Language { GLSL, SLANG }
-    public enum Stage { VERTEX, FRAGMENT, COMPUTE }
+    public enum Stage {
+        VERTEX, FRAGMENT, COMPUTE, GEOMETRY, TESS_CONTROL, TESS_EVALUATION;
+        public static Stage forPath(String path) {
+            if(path.endsWith(".vsh"))return VERTEX;
+            if(path.endsWith(".gsh"))return GEOMETRY;
+            if(path.endsWith(".tcs"))return TESS_CONTROL;
+            if(path.endsWith(".tes"))return TESS_EVALUATION;
+            if(path.endsWith(".csh") || path.endsWith(".comp"))return COMPUTE;
+            return FRAGMENT;
+        }
+    }
     public record Result(boolean success, String diagnostics, byte[] spirv) {
         public Result { spirv = spirv.clone(); }
         @Override public byte[] spirv() { return spirv.clone(); }
@@ -119,7 +129,8 @@ public final class ShaderCompiler {
             shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_5);
             shaderc_compile_options_set_auto_bind_uniforms(options, true);
             shaderc_compile_options_set_auto_map_locations(options, true);
-            int kind = switch (stage) { case VERTEX -> shaderc_vertex_shader; case FRAGMENT -> shaderc_fragment_shader; case COMPUTE -> shaderc_compute_shader; };
+            int kind = switch (stage) { case VERTEX -> shaderc_vertex_shader; case FRAGMENT -> shaderc_fragment_shader; case COMPUTE -> shaderc_compute_shader;
+                case GEOMETRY->shaderc_geometry_shader;case TESS_CONTROL->shaderc_tess_control_shader;case TESS_EVALUATION->shaderc_tess_evaluation_shader; };
             result = shaderc_compile_into_spv(compiler, source, kind, name, "main", options);
             if (result == 0) return failure("Shaderc returned no compilation result");
             String diagnostic = shaderc_result_get_error_message(result);
@@ -135,6 +146,8 @@ public final class ShaderCompiler {
         }
     }
     private static Result slang(Stage stage, String source, Path executable) throws IOException {
+        if(stage==Stage.GEOMETRY || stage==Stage.TESS_CONTROL || stage==Stage.TESS_EVALUATION)
+            return failure("Intermediate Slang stages are unsupported; use the GLSL stage source");
         if (executable == null || !Files.isRegularFile(executable) || !Files.isExecutable(executable))
             return failure("Slang compiler unavailable: configure an executable compatible with this platform");
         Path directory = Files.createTempDirectory("greenmarine-slang-");
@@ -142,7 +155,7 @@ public final class ShaderCompiler {
         try {
             Path input = directory.resolve("shader.slang"), output = directory.resolve("shader.spv");
             Files.writeString(input, source, StandardCharsets.UTF_8);
-            String targetStage = switch(stage) { case VERTEX -> "vertex"; case FRAGMENT -> "fragment"; case COMPUTE -> "compute"; };
+            String targetStage = switch(stage) { case VERTEX -> "vertex"; case FRAGMENT -> "fragment"; case COMPUTE -> "compute"; default->throw new IllegalArgumentException("Unsupported Slang stage"); };
             process = new ProcessBuilder(executable.toAbsolutePath().toString(), input.toString(), "-entry", "main", "-stage", targetStage,
                 "-target", "spirv", "-profile", "spirv_1_5", "-o", output.toString()).directory(directory.toFile()).redirectErrorStream(true).start();
             Process running = process;
@@ -189,7 +202,8 @@ public final class ShaderCompiler {
             int version = words.getInt(4), bound = words.getInt(12);
             if (words.getInt(0) != 0x07230203 || version < 0x10000 || version > 0x10500 || (version & 255) != 0 || bound < 1 || bound > 1_000_000 || words.getInt(16) != 0)
                 return failure("Invalid SPIR-V header");
-            int expected = stage == Stage.VERTEX ? 0 : 5, entry = 0, function = 0;
+            int expected = switch(stage){case VERTEX->0;case TESS_CONTROL->1;case TESS_EVALUATION->2;case GEOMETRY->3;case FRAGMENT->4;case COMPUTE->5;}, entry = 0, function = 0;
+            int requiredCapability=stage==Stage.GEOMETRY?2:stage==Stage.TESS_CONTROL || stage==Stage.TESS_EVALUATION?3:1;
             boolean shaderCapability = false, memoryModel = false;
             var completedFunctions = new HashSet<Integer>();
             for (int offset = 20; offset < bytes.length;) {
@@ -197,7 +211,7 @@ public final class ShaderCompiler {
                 if (count == 0 || (long) offset + count * 4L > bytes.length) return failure("Truncated SPIR-V instruction");
                 if (opcode == 17) {
                     if (count != 2) return failure("Invalid SPIR-V capability");
-                    if (words.getInt(offset + 4) == 1) shaderCapability = true;
+                    if (words.getInt(offset + 4) == requiredCapability) shaderCapability = true;
                 }
                 if (opcode == 14) {
                     if (count != 3) return failure("Invalid SPIR-V memory model");

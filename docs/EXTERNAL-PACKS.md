@@ -33,9 +33,16 @@ origin in the log. A GPU compiler error still disables the selected rendering
 until switch/reload; filesystem validation is not shader compilation.
 
 Snapshots are read only on resource reload, with 64 external containers/manifests,
-2048 entries per container, 8 MiB assets per container and 32 MiB assets per scan.
+4096 entries per container, 32 MiB assets per container and 128 MiB assets per scan.
 Individual text assets are at most 256 KiB, manifests/Lua 64 KiB, SPIR-V 4 MiB.
 Unsafe ZIP paths, duplicate entries and filesystem symlinks are rejected.
+Entry counts include preserved project files and directories; only `assets/`
+resources contribute to snapshot bytes. Original sources and conversion reports
+outside `assets/` remain editable project files and are not loaded as shaders.
+The catalog resolves at most 512 distinct include resources per pack, with a
+maximum include depth of 16. Declared root shaders use their schema stage limits
+and do not consume the include count. These limits cover loading and validation;
+they do not establish shader translation, GPU compilation or rendering support.
 
 ## Create and export
 

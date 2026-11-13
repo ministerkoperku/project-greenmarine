@@ -9,7 +9,7 @@ import java.util.*;
 import java.util.regex.*;
 import java.util.zip.*;
 
-/** Bounded source import and conservative fullscreen translation, not an Iris runtime. */
+/** Bounded whole-program editable conversion plus conservative selectable fullscreen translation. */
 public final class IrisImporter {
     public record Report(boolean runnable, int sourceFiles, List<String> diagnostics, Path destination) {
         public Report { diagnostics = List.copyOf(diagnostics); }
@@ -41,7 +41,7 @@ public final class IrisImporter {
         }
         if (snapshot.keySet().stream().noneMatch(name -> name.startsWith("shaders/"))) throw new IOException("No Iris shaders/ directory found");
         var diagnostics = new ArrayList<String>();
-        diagnostics.add("Source snapshot and limited fullscreen conversion; not full Iris runtime compatibility.");
+        diagnostics.add("Automatic Iris source conversion with native execution requirements checked separately from Vulkan rendering acceptance; not full Iris runtime compatibility.");
         var problems = new LinkedHashSet<String>();
         String candidate = snapshot.containsKey("shaders/final.fsh") ? "shaders/final.fsh" :
             snapshot.containsKey("shaders/composite.fsh") ? "shaders/composite.fsh" : null;
@@ -66,16 +66,30 @@ public final class IrisImporter {
         createDirectories(output.getParent()); checkAncestors(output.getParent());
         Path staging = Files.createTempDirectory(output.getParent(), ".iris-import-");
         try {
+            boolean nativeExecutable=false;
             for (var entry : snapshot.entrySet()) write(staging.resolve("iris-source").resolve(entry.getKey()), entry.getValue());
-            if (translated != null) write(staging.resolve(runnable ? FRAGMENT : "conversion-candidate/converted.fsh"), translated.getBytes(StandardCharsets.UTF_8));
-            if (runnable) {
+            try {
+                var project = IrisProjectExporter.export(com.koper.greenmarine.development.iris.IrisSources.of(snapshot), staging);
+                diagnostics.add(project.report());
+                nativeExecutable=project.executable();
+            } catch (IllegalArgumentException | LinkageError e) {
+                diagnostics.add("Whole-program conversion unavailable: " + e + ". Source snapshot remains preserved.");
+            }
+            if (translated != null) write(staging.resolve(runnable && !nativeExecutable ? FRAGMENT : "conversion-candidate/converted.fsh"), translated.getBytes(StandardCharsets.UTF_8));
+            if (runnable && !nativeExecutable) {
                 String suffix = UUID.randomUUID().toString().replace("-", "");
                 write(staging.resolve("assets/iris_imported/greenmarine/packs/imported.json"), ("""
                     {"schema":1,"id":"iris_imported:converted_%s","name":"Imported Iris fullscreen effect",
                      "passes":[{"name":"converted","fragment":"iris_imported:core/converted"}]}
                     """).formatted(suffix).getBytes(StandardCharsets.UTF_8));
             }
-            String report = "# Iris import report\n\nRunnable fullscreen candidate: " + runnable + "\nSource files preserved: " + snapshot.size() + "\n\n" +
+            runnable=runnable || nativeExecutable;
+            if(nativeExecutable) {
+                diagnostics.removeAll(problems);
+                diagnostics.remove("Manual conversion required. No selectable GreenMarine pack manifest was generated.");
+                diagnostics.add("All selected source passes lowered automatically to a native execution manifest; Vulkan runtime rendering remains unverified.");
+            }
+            String report = "# Iris import report\n\nRunnable native candidate: " + runnable + "\nSource files preserved: " + snapshot.size() + "\n\n" +
                 String.join("\n\n", diagnostics) + "\n\nOriginal files are under iris-source/. Edit translated GLSL only after reviewing this report.\n" +
                 "Format references: https://shaders.properties/current/reference/programs/final/ and https://shaders.properties/current/reference/buffers/colortex/\n";
             write(staging.resolve("IMPORT-REPORT.md"), report.getBytes(StandardCharsets.UTF_8));

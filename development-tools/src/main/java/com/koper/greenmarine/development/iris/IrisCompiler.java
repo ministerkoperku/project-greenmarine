@@ -9,14 +9,23 @@ public final class IrisCompiler {
     private IrisCompiler() {}
 
     public static Result compile(String source, IrisStage stage, String name) {
+        return compile(source, stage, name, true);
+    }
+
+    /** Program-linked sources must declare every descriptor binding and interface location explicitly. */
+    public static Result compileExplicit(String source, IrisStage stage, String name) {
+        return compile(source, stage, name, false);
+    }
+
+    private static Result compile(String source, IrisStage stage, String name, boolean automatic) {
         long compiler = shaderc_compiler_initialize(), options = 0, result = 0;
         if (compiler == 0) return new Result(false, "Shaderc unavailable", new byte[0]);
         try {
             options = shaderc_compile_options_initialize();
             shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
             shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_5);
-            shaderc_compile_options_set_auto_map_locations(options, true);
-            shaderc_compile_options_set_auto_bind_uniforms(options, true);
+            shaderc_compile_options_set_auto_map_locations(options, automatic);
+            shaderc_compile_options_set_auto_bind_uniforms(options, automatic);
             long finalOptions = options;
             result = NativeText.with(source, name, (text, file, entry) -> shaderc_compile_into_spv(compiler, text, stage.shadercKind(), file, entry, finalOptions));
             String diagnostics = shaderc_result_get_error_message(result);

@@ -4,6 +4,47 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SectionSceneCacheTest {
+    @Test void anUnavailableColumnCannotBeAdvertisedAsACompleteScene() {
+        var cache=cache();fill(cache);cache.observeColumn(2,2,false);
+        assertEquals(0,cache.pendingSections(),"Unavailable chunks have no extraction work until data arrives");
+        assertFalse(cache.snapshot().complete(),"No pending extraction does not imply known occluder coverage");
+        assertEquals(4,cache.snapshot().pendingSections());
+        assertEquals(140,cache.resolvedSections(),"Progress must not count unavailable sections as resolved");
+        assertNull(cache.publicationSnapshot(null));
+    }
+    @Test void enteringAnUnavailableOuterColumnKeepsThePreviouslyCoveredVolume() {
+        var cache=cache();fill(cache);var previous=cache.bounds();
+        cache.retarget(new SceneBounds(16,0,0),56,24,40);cache.observeColumn(6,0,false);fill(cache);
+        assertEquals(previous,cache.publicationSnapshot(previous).bounds(),
+            "A new volume with an unavailable column must not replace the covered old volume");
+        cache.observeColumn(6,0,true);fill(cache);
+        assertEquals(new SceneBounds(16,0,0),cache.publicationSnapshot(previous).bounds());
+    }
+    @Test void completedWorkerCannotOverwriteANewerOccluderMeshAtTheSameBounds() {
+        var cache=cache();fill(cache);var prepared=cache.publicationSnapshot(null);
+        assertTrue(cache.canPublish(prepared.bounds(),prepared.contentHash()));
+        cache.invalidateBlock(40,24,40);assertTrue(cache.complete(cache.next(),mesh(.75f)));
+        assertFalse(cache.canPublish(prepared.bounds(),prepared.contentHash()),
+            "Bounds equality cannot validate geometry extracted before a later wall edit");
+        var fresh=cache.publicationSnapshot(null);assertTrue(cache.canPublish(fresh.bounds(),fresh.contentHash()));
+    }
+    @Test void aCoherentPreparedOldVolumeCanPublishWhenTheNextVolumeFinishesExtraction() {
+        var cache=cache();fill(cache);var prepared=cache.publicationSnapshot(null);
+        cache.retarget(new SceneBounds(16,0,0),56,24,40);fill(cache);
+        assertTrue(cache.canPublish(prepared.bounds(),prepared.contentHash()),
+            "Finishing unrelated outer coverage must not discard already prepared valid geometry");
+    }
+    @Test void unloadingAColumnRejectsAlreadyPreparedWorkThatClaimsItsCoverage() {
+        var cache=cache();fill(cache);var prepared=cache.publicationSnapshot(null);
+        cache.observeColumn(2,2,false);
+        assertFalse(cache.canPublish(prepared.bounds(),prepared.contentHash()));
+    }
+    @Test void attachmentSectionEditsInvalidateCachedAndInProgressGeometryWithoutAStateChange() {
+        var cache=cache();fill(cache);cache.invalidateSection(2,1,2);
+        assertEquals(27,cache.pendingSections());var ticket=cache.next();
+        cache.invalidateSection(2,1,2);assertFalse(cache.complete(ticket,mesh(.25f)));
+        assertEquals(27,cache.pendingSections());
+    }
     @Test void movementKeepsCoveredSceneUntilTheNewVolumeIsReadyWithoutLosingEdits() {
         var cache=cache();fill(cache);var prior=cache.bounds();
         assertEquals(prior,cache.publicationSnapshot(null).bounds());

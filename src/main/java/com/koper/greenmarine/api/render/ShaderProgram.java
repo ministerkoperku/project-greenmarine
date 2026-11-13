@@ -13,6 +13,8 @@ public final class ShaderProgram {
     private final Map<Identifier,String> vertexSources;
     private final Map<String, UniformType> bindings;
     private final Map<String, Storage> storage;
+    private final Map<GraphicsStage,ShaderStageSource> stages;
+    private final int inputPatchVertices;
     /**
      * Raster storage access. In the BindGroupLayout a storage buffer is declared as
      * UNIFORM_BUFFER and a storage image as COMBINED_IMAGE_SAMPLER; {@link #withStorage} marks them.
@@ -25,7 +27,11 @@ public final class ShaderProgram {
         this(pipeline,sources,includes,fragments,Map.of(),Map.of());
     }
     private ShaderProgram(RenderPipeline pipeline,Map<Identifier,String> sources,Map<Identifier,String> includes,Map<Identifier,ShaderBinary> fragments,Map<Identifier,String> vertices,Map<String,Storage> storage) {
+        this(pipeline,sources,includes,fragments,vertices,storage,Map.of(),0);
+    }
+    private ShaderProgram(RenderPipeline pipeline,Map<Identifier,String> sources,Map<Identifier,String> includes,Map<Identifier,ShaderBinary> fragments,Map<Identifier,String> vertices,Map<String,Storage> storage,Map<GraphicsStage,ShaderStageSource> stages,int inputPatchVertices) {
         this.pipeline = Objects.requireNonNull(pipeline);
+        this.stages=Map.copyOf(stages);this.inputPatchVertices=inputPatchVertices;
         this.vertexSources=Map.copyOf(vertices);
         this.sources = Map.copyOf(sources); this.includes = Map.copyOf(includes); this.fragments = Map.copyOf(fragments);
         for (var stage : pipeline.getShaders().entrySet()) {
@@ -54,9 +60,22 @@ public final class ShaderProgram {
     /** Same sources and pipeline with the given names bound as storage descriptors (Vulkan only). */
     public ShaderProgram withStorage(Map<String, Storage> names) {
         var merged = new LinkedHashMap<>(storage); merged.putAll(names);
-        return new ShaderProgram(pipeline, sources, includes, fragments, vertexSources, merged);
+        return new ShaderProgram(pipeline, sources, includes, fragments, vertexSources, merged,stages,inputPatchVertices);
     }
     public Map<String, Storage> storage() { return storage; }
+    /** Adds real Vulkan graphics stages; the host pipeline retains its ordinary vertex/fragment declaration.
+     * Endpoint entries optionally replace their source/binary. Tessellation requires both stages and
+     * the number of input vertices per patch (independent of the TCS output vertex count).
+     */
+    public ShaderProgram withStages(Map<GraphicsStage,ShaderStageSource> declarations,int inputPatchVertices) {
+        var merged=new EnumMap<GraphicsStage,ShaderStageSource>(GraphicsStage.class);merged.putAll(stages);merged.putAll(declarations);
+        merged.forEach((stage,source)->{Objects.requireNonNull(source);if(source.binary()!=null && source.binary().stage()!=stage)throw new IllegalArgumentException("Binary stage differs from "+stage);});
+        boolean tc=merged.containsKey(GraphicsStage.TESS_CONTROL),te=merged.containsKey(GraphicsStage.TESS_EVALUATION);
+        if(tc!=te || tc!=(inputPatchVertices>0) || inputPatchVertices<0 || inputPatchVertices>32)throw new IllegalArgumentException("Tessellation requires both stages and an input patch size in 1..32");
+        return new ShaderProgram(pipeline,sources,includes,fragments,vertexSources,storage,merged,inputPatchVertices);
+    }
+    public Map<GraphicsStage,ShaderStageSource> stages() {return stages;}
+    public int inputPatchVertices() {return inputPatchVertices;}
     /** Reuses a schema-v1 pack snapshot; additional sources normally supply the vertex stage. */
     public static ShaderProgram fromPack(RenderPipeline pipeline, com.koper.greenmarine.api.pack.PackCatalog.LoadedPack pack,
                                          Map<Identifier, String> additionalSources) {
@@ -66,6 +85,7 @@ public final class ShaderProgram {
         var vertices=new LinkedHashMap<Identifier,String>();
         pack.sources().forEach((key, value) -> {
             if (key.startsWith("compute|")) return;
+            if(key.startsWith("geometry|") || key.startsWith("tess_control|") || key.startsWith("tess_evaluation|"))return;
             if (key.startsWith("include|")) includes.put(Identifier.parse(key.substring(8)), value);
             else if(key.startsWith("vertex|")) vertices.put(Identifier.parse(key.substring(7)),value);
             else sources.put(Identifier.parse(key), value);
@@ -78,7 +98,10 @@ public final class ShaderProgram {
         return new ShaderProgram(pipeline, sources, includes, binaries,vertices,Map.of());
     }
     /** Stage-aware lookup also supports matching vertex/fragment resource ids. */
-    public String source(Identifier id,ShaderType type) {return type==ShaderType.VERTEX?vertexSources.getOrDefault(id,sources.get(id)):sources.get(id);}
+    public String source(Identifier id,ShaderType type) {
+        var replacement=stages.get(type==ShaderType.VERTEX?GraphicsStage.VERTEX:GraphicsStage.FRAGMENT);
+        return replacement!=null?replacement.source():type==ShaderType.VERTEX?vertexSources.getOrDefault(id,sources.get(id)):sources.get(id);
+    }
     public RenderPipeline pipeline() { return pipeline; }
     public Map<Identifier, String> sources() { return sources; }
     public Map<Identifier, String> includes() { return includes; }

@@ -42,16 +42,24 @@ fallback.
 
 ### Resources
 
-`resources.images` are persistent 2D storage textures; `resources.buffers` are
+`resources.images` are owned storage textures; `resources.buffers` are
 persistent storage buffers. Both keep their contents across frames, so temporal
 techniques are just a read-modify-write. They are zero-cleared on pack change,
 resource reload and failure recovery; scaled images are also re-created (and
 cleared) when the window size changes.
 
+An image may opt into `"clearEachFrame": true`. GreenMarine zeroes that owned
+image once before the first world-frame phase, across its entire 1D/2D/3D extent.
+Later phases retain the current frame's writes. New allocations are already
+initialized; repeated entry into the same frame does not clear again. Existing
+constructors and manifests default to persistent contents (`false`). The Iris
+converter translates each image declaration's clear flag to this native field.
+
 | Field | Values |
 | --- | --- |
 | image `format` | `rgba8`, `rgba16f` (default), `rgba32f`, `r32f`, `rg32f`, `r16f`, `rg16f`, `r32ui`, `rg32ui`, `rgba32ui`, `r11g11b10f` |
 | image size | `"size": [w, h]` (1..8192) or `"scale"`: 1, 0.75, 0.5, 0.25 of the scene |
+| image `clearEachFrame` | boolean, default `false`; zero before the first frame phase |
 | buffer `size` | bytes, multiple of 4, up to 64 MiB (128 MiB per pack) |
 
 At most 16 images and 16 buffers. Names follow GLSL identifier rules and must not

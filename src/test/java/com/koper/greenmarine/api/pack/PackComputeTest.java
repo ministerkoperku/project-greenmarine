@@ -35,6 +35,20 @@ class PackComputeTest {
         assertEquals("assets/demo/shaders/compute/sun.csh".replace("assets/", ""), PackCatalog.computeResource("demo:compute/sun").replace("demo:", "demo/"));
     }
 
+    @Test void perFrameImageClearingIsExplicitAndLegacyImagesRemainPersistent() {
+        for(String size:List.of("[17]","[5,3]","[5,3,2]")) {
+            String base=MANIFEST.replace("[64,32]",size);
+            var persistent=parse(base).resources().images().get("Sky");
+            var disabled=parse(base.replace("\"size\":"+size,"\"clearEachFrame\":false,\"size\":"+size)).resources().images().get("Sky");
+            var cleared=parse(base.replace("\"size\":"+size,"\"clearEachFrame\":true,\"size\":"+size)).resources().images().get("Sky");
+            assertEquals(persistent,disabled);
+            assertNotEquals(persistent,cleared,"Frame-cleared images must retain their distinct lifecycle");
+        }
+        var persistent=parse(MANIFEST).resources().images().get("Half");
+        var cleared=parse(MANIFEST.replace("\"scale\":0.5","\"scale\":0.5,\"clearEachFrame\":true")).resources().images().get("Half");
+        assertNotEquals(persistent,cleared);
+    }
+
     @Test void schedulesComputeInOrderAndDropsItWithoutComputePath() {
         var pack = parse(MANIFEST);
         var scheduled = RenderSchedule.scene(pack, Quality.LOW, compute, RayMode.OFF, 100, 50).stream().map(p -> p.resolved().definition().name()).toList();
@@ -42,6 +56,21 @@ class PackComputeTest {
         var portable = RenderSchedule.scene(pack, Quality.LOW, noCompute, RayMode.OFF, 100, 50).stream().map(p -> p.resolved().definition().name()).toList();
         assertEquals(List.of("grade", "compose"), portable);
         assertTrue(RenderSchedule.retainedOutputs(RenderSchedule.scene(pack, Quality.LOW, compute, RayMode.OFF, 100, 50)).contains("grade"));
+    }
+
+    @Test void declaresThreeDimensionalLpvResourcesWithoutChangingTwoDimensionalPacks() {
+        var pack = parse(MANIFEST.replace("\"size\":[64,32]", "\"size\":[64,32,16]"));
+        assertEquals(64, pack.resources().images().get("Sky").width(100));
+        assertEquals(32, pack.resources().images().get("Sky").height(50));
+        assertEquals("image:Sky", pack.passes().get(1).groups());
+        for (var size : List.of("[64,32,0]", "[64,32,-1]", "[64,32,16,2]"))
+            assertThrows(IllegalArgumentException.class, () -> parse(MANIFEST.replace("[64,32]", size)));
+    }
+
+    @Test void declaresOneDimensionalBlockDataImage() {
+        var pack = parse(MANIFEST.replace("\"size\":[64,32]", "\"size\":[2048]"));
+        assertEquals(2048, pack.resources().images().get("Sky").width(100));
+        assertEquals(1, pack.resources().images().get("Sky").height(50));
     }
 
     @Test void computeRequirementSelectsFragmentFallback() {

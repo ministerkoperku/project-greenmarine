@@ -50,7 +50,7 @@ public final class SectionSceneCache {
     private final Set<SectionKey> active=new HashSet<>();
     private final int triangleBudget;
     private Set<ColumnKey> columns;
-    private int pending;
+    private int pending,unavailable;
     private SceneBounds bounds;
     private double cameraX,cameraY,cameraZ;
     private long epoch,revision,rebuilt,hits,cachedTriangles;
@@ -74,7 +74,9 @@ public final class SectionSceneCache {
             if(entry==null){entries.put(key,new Entry(++epoch));columns=null;}else if(!entry.dirty)hits++;
         }
         for(var key:previous)if(!active.contains(key))entries.get(key).version++;
-        trim();pending=0;for(var key:active){var entry=entries.get(key);if(entry.loaded&&entry.dirty)pending++;}revision++;
+        trim();pending=unavailable=0;
+        for(var key:active){var entry=entries.get(key);if(!entry.loaded)unavailable++;else if(entry.dirty)pending++;}
+        revision++;
     }
     private void trim() {
         var iterator=entries.entrySet().iterator();
@@ -93,7 +95,9 @@ public final class SectionSceneCache {
     public long cachedTriangles() {return cachedTriangles;}
     public long cachedBytes() {return cachedTriangles*TriangleScene.TRIANGLE_BYTES;}
     public int pendingSections() {return pending;}
-    public int resolvedSections() {return active.size()-pendingSections();}
+    /** Unknown chunk data has no extractable work, but still prevents complete scene coverage. */
+    public int unavailableSections() {return unavailable;}
+    public int resolvedSections() {return active.size()-pending-unavailable;}
     public Metrics metrics() {return new Metrics(rebuilt,hits,entries.size(),pendingSections());}
     public Ticket next() {
         if(pending==0)return null;
@@ -147,6 +151,10 @@ public final class SectionSceneCache {
         if(active.contains(key)&&entry.loaded&&!entry.dirty)pending++;
         entry.version++;entry.dirty=true;entry.urgent=true;
     }
+    /** Data attachments can alter an entire section without changing any BlockState. */
+    public void invalidateSection(int x,int y,int z) {
+        for(int dy=-1;dy<=1;dy++)for(int dz=-1;dz<=1;dz++)for(int dx=-1;dx<=1;dx++)invalidate(new SectionKey(x+dx,y+dy,z+dz));
+    }
     /** Full packets and biome blending affect neighboring columns too. */
     public void invalidateColumn(int x,int z) {
         for(var pair:entries.entrySet())if(Math.abs((long)pair.getKey().x()-x)<=1 && Math.abs((long)pair.getKey().z()-z)<=1) {
@@ -157,6 +165,7 @@ public final class SectionSceneCache {
     public void observeColumn(int x,int z,boolean loaded) {
         for(var pair:entries.entrySet())if(pair.getKey().x()==x && pair.getKey().z()==z) {
             var entry=pair.getValue();if(entry.loaded==loaded)continue;
+            if(active.contains(pair.getKey()))unavailable+=loaded?-1:1;
             if(active.contains(pair.getKey())&&entry.loaded&&entry.dirty)pending--;
             entry.loaded=loaded;entry.version++;entry.dirty=loaded;
             if(active.contains(pair.getKey())&&loaded)pending++;
@@ -166,22 +175,28 @@ public final class SectionSceneCache {
     }
     public void unloadColumn(int x,int z) {observeColumn(x,z,false);invalidateColumn(x,z);}
     public void invalidateAll() {for(var pair:entries.entrySet()){var entry=pair.getValue();if(active.contains(pair.getKey())&&entry.loaded&&!entry.dirty)pending++;entry.version++;entry.dirty=true;entry.urgent=true;}}
-    public void reset() {epoch++;revision++;entries.clear();active.clear();columns=null;pending=0;bounds=null;rebuilt=hits=cachedTriangles=0;}
+    public void reset() {epoch++;revision++;entries.clear();active.clear();columns=null;pending=unavailable=0;bounds=null;rebuilt=hits=cachedTriangles=0;}
     public Snapshot snapshot() {
         if(bounds==null)throw new IllegalStateException("Scene bounds have not been selected");
         return snapshot(bounds);
     }
-    /** Keep the previous covered volume while new outer sections are extracted. */
+    /** Keep the previous covered volume while new outer sections are extracted.
+     * An unavailable column is unknown occlusion, never an extracted empty column. */
     public Snapshot publicationSnapshot(SceneBounds previous) {
         if(bounds==null)return null;
         if(covered(bounds))return snapshot(bounds);
         return previous!=null && covered(previous)?snapshot(previous):null;
     }
+    /** Validate the latest completed mesh content, not just its grid origin, before native publication.
+     * A still-covered previous volume remains useful even after a different target becomes ready. */
+    public boolean canPublish(SceneBounds area,long contentHash) {
+        return area!=null && covered(area) && snapshot(area).contentHash()==contentHash;
+    }
     private boolean covered(SceneBounds area) {
         for(int y=Math.floorDiv(area.y(),16);y<Math.floorDiv(area.y(),16)+SceneBounds.HEIGHT/16;y++)
             for(int z=Math.floorDiv(area.z(),16);z<Math.floorDiv(area.z(),16)+SceneBounds.WIDTH/16;z++)
                 for(int x=Math.floorDiv(area.x(),16);x<Math.floorDiv(area.x(),16)+SceneBounds.WIDTH/16;x++){
-                    var entry=entries.get(new SectionKey(x,y,z));if(entry==null || entry.loaded&&entry.mesh==null)return false;
+                    var entry=entries.get(new SectionKey(x,y,z));if(entry==null || !entry.loaded || entry.mesh==null)return false;
                 }
         return true;
     }
@@ -193,7 +208,7 @@ public final class SectionSceneCache {
                 for(int x=Math.floorDiv(area.x(),16);x<Math.floorDiv(area.x(),16)+SceneBounds.WIDTH/16;x++) {
                     var key=new SectionKey(x,y,z);var entry=entries.get(key);
                     if(entry==null){missing++;continue;}
-                    if(entry.loaded&&entry.dirty)missing++;
+                    if(!entry.loaded || entry.dirty)missing++;
                     if(entry.loaded&&entry.mesh!=null)sections.add(new Section(key,entry.mesh));
                 }
         sections.sort(Comparator.comparing(Section::key));

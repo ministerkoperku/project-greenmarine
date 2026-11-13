@@ -20,9 +20,13 @@ public final class PackCompute {
     private static final Map<String, Image> IMAGES = new LinkedHashMap<>();
     private static final Map<String, GpuBuffer> BUFFERS = new LinkedHashMap<>();
     private static final Map<String, ComputeBackend.Pipeline> PIPELINES = new HashMap<>();
+    private static final Map<String,Map<String,UniformAbi.Block>> UNIFORM_ABI=new HashMap<>();
     private static PackResources declared;
     private static int width, height;
     private static long dispatches;
+    private static final Set<String> newlyCleared=new HashSet<>();
+    private static boolean frameBegun;
+    private static long clearEpoch;
     private PackCompute() {}
 
     static GpuFormat format(PackResources.Format format) {
@@ -39,7 +43,10 @@ public final class PackCompute {
 
     /** Allocates/clears declared resources; scaled images follow the scene size. */
     static void prepare(PackResources resources, CommandEncoder encoder, int sceneWidth, int sceneHeight) {
-        if (resources.isEmpty()) { if (declared != null) closeResources(); return; }
+        if (resources.images().isEmpty() && resources.buffers().isEmpty()) {
+            if (declared != null) closeResources();
+            width=sceneWidth;height=sceneHeight;return;
+        }
         boolean resized = width != sceneWidth || height != sceneHeight;
         if (declared == resources && !resized) return;
         var vk = ComputeBackend.vulkan(RenderSystem.getDevice());
@@ -54,11 +61,16 @@ public final class PackCompute {
             if (existing != null) { existing.view().close(); existing.texture().close(); }
             var format = format(spec.format());
             if (!ComputeBackend.storageFormat(vk, format)) throw new IllegalArgumentException("Image " + entry.getKey() + ": " + spec.format() + " is not a storage format on this device");
-            var texture = HostStorage.create(() -> device.createTexture("GreenMarine pack image " + entry.getKey(),
-                GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_RENDER_ATTACHMENT, format, w, h, 1, 1));
+            var texture = spec.dimensions() == 1 ? HostImages.createLine(device, "GreenMarine pack line " + entry.getKey(), format, w)
+                : spec.volume() ? HostImages.create(device, "GreenMarine pack volume " + entry.getKey(),
+                new com.koper.greenmarine.api.render.VolumeSpec(format, w, h, spec.depth()))
+                : HostStorage.create(() -> device.createTexture("GreenMarine pack image " + entry.getKey(),
+                    GpuTexture.USAGE_TEXTURE_BINDING | GpuTexture.USAGE_COPY_SRC | GpuTexture.USAGE_COPY_DST | GpuTexture.USAGE_RENDER_ATTACHMENT, format, w, h, 1, 1));
             ComputeBackend.storage(texture);
             IMAGES.put(entry.getKey(), new Image(spec, texture, device.createTextureView(texture)));
-            encoder.clearColorTexture(texture, new Vector4f());
+            if (spec.dimensions() != 2) HostImages.clear(encoder, texture);
+            else encoder.clearColorTexture(texture, new Vector4f());
+            newlyCleared.add(entry.getKey());
         }
         for (var entry : resources.buffers().entrySet()) {
             if (BUFFERS.containsKey(entry.getKey())) continue;
@@ -71,6 +83,17 @@ public final class PackCompute {
         }
     }
 
+    /** Before SETUP/BEGIN, once per renderer frame; allocation already initialized new images. */
+    static void beginFrame(CommandEncoder encoder,long epoch) {
+        if(frameBegun && clearEpoch==epoch)return;
+        for(var entry:IMAGES.entrySet())if(entry.getValue().spec().clearEachFrame() && !newlyCleared.contains(entry.getKey())) {
+            var image=entry.getValue();
+            if(image.spec().dimensions()!=2)HostImages.clear(encoder,image.texture());
+            else encoder.clearColorTexture(image.texture(),new Vector4f());
+        }
+        newlyCleared.clear();clearEpoch=epoch;frameBegun=true;
+    }
+
     public static GpuBuffer buffer(String name) { return BUFFERS.get(name); }
     public static GpuTextureView image(String name) { var image = IMAGES.get(name); return image == null ? null : image.view(); }
     static boolean integerImage(String name) { var image = IMAGES.get(name); return image != null && integer(image.spec().format()); }
@@ -78,6 +101,10 @@ public final class PackCompute {
     /** Builtins hold the same samplers as a scene pass at this point of the chain. */
     static void dispatch(CommandEncoder encoder, PackCatalog.LoadedPack pack, PackPass pass, GpuBufferSlice frame,
                          Map<String, GpuTextureView> builtins, Map<String, GpuTextureView> inputs) {
+        dispatch(encoder,pack,pass,frame,builtins,inputs,Map.of());
+    }
+    static void dispatch(CommandEncoder encoder, PackCatalog.LoadedPack pack, PackPass pass, GpuBufferSlice frame,
+                         Map<String, GpuTextureView> builtins, Map<String, GpuTextureView> inputs,Map<String,GpuBufferSlice> uniformBindings) {
         var vk = ComputeBackend.vulkan(RenderSystem.getDevice());
         var pipeline = PIPELINES.computeIfAbsent(pass.fragment(), id -> {
             String source = pack.sources().get("compute|" + id);
@@ -85,18 +112,24 @@ public final class PackCompute {
             var expanded = ComputeBackend.expand(source, include -> pack.sources().get("include|" + include));
             byte[] spirv = ComputeBackend.compile(id, expanded);
             var created = ComputeBackend.create(vk, spirv, ComputeBackend.reflect(spirv));
+            try {UNIFORM_ABI.put(id,UniformAbi.reflect(java.nio.ByteBuffer.wrap(spirv)));}
+            catch(RuntimeException|LinkageError failure) {created.release(vk);throw failure;}
             com.koper.greenmarine.GreenMarine.LOGGER.info("Compiled pack compute {}: bindings={}, local={}x{}x{}", id,
                 created.reflection().slots(), created.reflection().localX(), created.reflection().localY(), created.reflection().localZ());
             return created;
         });
+        var uniformDefinitions=new LinkedHashMap<String,PackUniformBlock>();
+        pass.uniforms().forEach((binding,resource)->uniformDefinitions.put(binding,pack.definition().resources().uniforms().get(resource)));
+        UniformAbi.validate(UNIFORM_ABI.get(pass.fragment()),uniformDefinitions);
         var reflection = pipeline.reflection();
         var bound = new ArrayList<ComputeBackend.Bound>(); var written = new HashSet<String>(); var sampled = new HashSet<String>();
         for (var slot : reflection.slots()) {
             String name = slot.name();
             bound.add(switch (slot.kind()) {
                 case UNIFORM_BUFFER -> {
-                    if (!name.equals("MarineFrame")) throw new IllegalArgumentException(pass.name() + ": unknown uniform block " + name + " (only MarineFrame; use buffer blocks for pack data)");
-                    yield new ComputeBackend.BufferRange(((VulkanGpuBuffer) frame.buffer()).vkBuffer(), frame.offset(), frame.length());
+                    var data=name.equals("MarineFrame")?frame:uniformBindings.get(name);
+                    if(data==null)throw new IllegalArgumentException(pass.name()+": uniform block "+name+" is not bound to a declared pack uniform resource");
+                    yield new ComputeBackend.BufferRange(((VulkanGpuBuffer) data.buffer()).vkBuffer(), data.offset(), data.length());
                 }
                 case STORAGE_BUFFER -> {
                     var buffer = BUFFERS.get(name);
@@ -106,14 +139,17 @@ public final class PackCompute {
                 case STORAGE_IMAGE -> {
                     var image = IMAGES.get(name);
                     if (image == null) throw new IllegalArgumentException(pass.name() + ": image " + name + " is not a declared pack image");
+                    HostImages.requireDimensions(name, slot.dimensions(), image.texture());
                     written.add(name);
                     yield new ComputeBackend.StorageImage(((VulkanGpuTextureView) image.view()).vkImageView());
                 }
                 case SAMPLED_TEXTURE -> {
                     var view = inputs.containsKey(name) ? inputs.get(name) : builtins.containsKey(name) ? builtins.get(name) : image(name);
                     if (view == null) throw new IllegalArgumentException(pass.name() + ": sampler " + name + " is not a builtin, input or pack image");
+                    HostImages.requireDimensions(name, slot.dimensions(), view.texture());
                     if (!inputs.containsKey(name) && !builtins.containsKey(name)) sampled.add(name);
-                    boolean nearest = name.equals("DepthSampler") || integerImage(name);
+                    boolean nearest = name.equals("DepthSampler") || integerImage(name)
+                        || com.koper.greenmarine.api.pack.PackDepthSource.named(pass.inputs().get(name))!=null;
                     var sampler = (VulkanGpuSampler) RenderSystem.getSamplerCache().getClampToEdge(nearest ? FilterMode.NEAREST : FilterMode.LINEAR);
                     yield new ComputeBackend.SampledImage(((VulkanGpuTextureView) view).vkImageView(), sampler.vkSampler());
                 }
@@ -129,7 +165,7 @@ public final class PackCompute {
         if (spec.equals("screen")) return new int[]{Math.ceilDiv(width, reflection.localX()), Math.ceilDiv(height, reflection.localY()), 1};
         if (spec.startsWith("image:")) {
             var image = IMAGES.get(spec.substring(6)).texture();
-            return new int[]{Math.ceilDiv(image.getWidth(0), reflection.localX()), Math.ceilDiv(image.getHeight(0), reflection.localY()), 1};
+            return new int[]{Math.ceilDiv(image.getWidth(0), reflection.localX()), Math.ceilDiv(image.getHeight(0), reflection.localY()), Math.ceilDiv(HostImages.depth(image), reflection.localZ())};
         }
         var parts = spec.split(",");
         return new int[]{Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2])};
@@ -147,11 +183,13 @@ public final class PackCompute {
         IMAGES.values().forEach(image -> { image.view().close(); image.texture().close(); }); IMAGES.clear();
         BUFFERS.values().forEach(GpuBuffer::close); BUFFERS.clear();
         declared = null; width = height = 0;
+        newlyCleared.clear();frameBegun=false;clearEpoch=0;
     }
     public static void close() {
         closeResources();
         var device = RenderSystem.tryGetDevice(); var vk = device == null ? null : ComputeBackend.vulkan(device);
         if (vk != null) PIPELINES.values().forEach(pipeline -> pipeline.release(vk));
         PIPELINES.clear(); dispatches = 0;
+        UNIFORM_ABI.clear();
     }
 }

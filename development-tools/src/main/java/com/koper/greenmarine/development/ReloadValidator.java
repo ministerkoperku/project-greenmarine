@@ -59,6 +59,7 @@ public final class ReloadValidator {
                     for (var program : definition.programs()) {
                         fragment(stages, program.fragment()); if (program.surface() != null) fragment(stages, program.surface());
                         if (program.vertex() != null) stages.put(PackCatalog.shaderResource(program.vertex()).replaceFirst("\\.fsh$", ".vsh"), ShaderCompiler.Stage.VERTEX);
+                        program.stages().forEach((stage,id)->stages.put(PackCatalog.stageResource(stage,id),ShaderCompiler.Stage.valueOf(stage.name())));
                     }
                     for (var stage : stages.entrySet()) {
                         String source = resolver.requireText(stage.getKey(), 262144);

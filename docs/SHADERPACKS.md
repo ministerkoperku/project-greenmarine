@@ -46,6 +46,11 @@ fixed format. A final incompatible format is converted by a draw, never copied
 as raw mismatched texels. Tonemapping remains the pack's responsibility.
 Float target allocation failure falls back to scene format with a log.
 
+Scene and compute passes can select host execution `phase`: `setup`, `begin`,
+`shadowcomp`, `prepare`, `deferred`, `composite` (default) or `final`. See
+[execution phases](SHADERPACK-PHASES.md) for actual host boundaries, resource
+lifetimes and shadow support limits. Existing manifests retain post-world order.
+
 Scene passes may opt into previous-frame output with `"history": true`; the
 default is false and lightmap passes reject this option. Each opted-in pass
 owns its own color ping-pong targets, matching its scale and actual allocated
@@ -83,8 +88,8 @@ the current frame's output, not previous-frame history.
 match `[A-Za-z_][A-Za-z0-9_]{0,63}`; `gl_` prefixes, double underscores and builtin
 binding names such as `ColorSampler`, `SceneSampler`, `MarineFrame`,
 `MarineSurfaceAlbedo`, `RayLighting`, `VoxelMaterials` and history bindings are
-reserved. Values must be strings naming an earlier scene pass in declaration
-order. Unknown, self, forward and lightmap references are rejected; lightmaps
+reserved. Values must be strings naming an earlier scene pass in phase execution
+order (declaration order within each phase). Unknown, self, forward and lightmap references are rejected; lightmaps
 cannot declare inputs. If quality or capabilities skip a producer needed by a
 selected consumer, rendering fails explicitly rather than sampling stale data.
 A selected fallback has the same inputs as its primary fragment. Packs should
@@ -427,6 +432,11 @@ Schema 1 additionally accepts optional `programs` with `target`, optional `verte
 See [world shader programs](WORLD-PROGRAMS.md) for the host interfaces, automatic
 bindings, OIT requirements and the Seabreeze example.
 
+Scene and compute passes may additionally select declaration-ordered std140 blocks
+through `resources.uniforms` and pass-level `uniforms` mappings. See
+[pack uniform blocks](PACK-UNIFORMS.md) for schema, explicit host-value preparation,
+limits and runtime integration status.
+
 ## Material addons
 
 A schema 1 manifest can declare up to 16 material addon JSON resources:
@@ -440,5 +450,6 @@ mounted resources. The catalog snapshots each declared JSON and its referenced
 mask PNGs during reload, so independently loaded packs can reuse resource IDs.
 These addons apply only while their owning shaderpack is selected. Invalid
 addons are reported independently and do not prevent the shaderpack from loading.
-JSON resources are limited to 64 KiB and mask PNG files to 256 KiB; external
-shaderpacks retain their existing 8 MiB snapshot limit.
+JSON resources are limited to 64 KiB and mask PNG files to 256 KiB. External
+shaderpacks have a 32 MiB asset snapshot limit per container and a 128 MiB
+aggregate limit per scan; see [external authoring](EXTERNAL-PACKS.md).

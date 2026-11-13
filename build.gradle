@@ -26,6 +26,16 @@ def androidNative = providers.gradleProperty('androidNative').map { it.toBoolean
 def extraAndroidNative = androidNative && nativeTarget != 'aarch64-linux-android'
 def nativeLibrary = "engine/target/${nativeTarget}/release/libgreenmarine_engine.so"
 def androidLibrary = 'engine/target/aarch64-linux-android/release/libgreenmarine_engine.so'
+sourceSets {
+    integration {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+}
+sourceSets.test.compileClasspath += sourceSets.integration.output
+sourceSets.test.runtimeClasspath += sourceSets.integration.output
+sourceSets.main.runtimeClasspath += sourceSets.integration.output
+tasks.named('jar') {from sourceSets.integration.output}
 if (runtimeProbe) {
     sourceSets {
         probe {
@@ -59,9 +69,11 @@ java {
     toolchain { languageVersion = JavaLanguageVersion.of(25) }
     withSourcesJar()
 }
+tasks.named('sourcesJar') {from sourceSets.integration.allSource}
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
 tasks.named('test') {
     useJUnitPlatform(); jvmArgs '--enable-native-access=ALL-UNNAMED'
+    systemProperty 'greenmarine.test.runtimeClasspath', sourceSets.test.runtimeClasspath.asPath
     if (providers.gradleProperty('pbrGpuTest').isPresent()) systemProperty 'greenmarine.test.gpu', 'true'
     def sodiumResources = providers.environmentVariable('GREENMARINE_TEST_SODIUM_RESOURCES')
     inputs.property 'sodiumShaderResources', sodiumResources.getOrElse('unavailable')
@@ -130,7 +142,7 @@ tasks.register('solsticeShaderpack', Zip) {
         into 'assets/greenmarine/shaders/core'
     }
     from('src/main/resources/assets/greenmarine/shaders/include') {
-        include 'solstice*.glsl', 'environment.glsl', 'surface_rays.glsl', 'surface_extra.glsl', 'heightfield.glsl', 'labpbr.glsl', 'history.glsl', 'frame.glsl', 'surface.glsl', 'rays.glsl', 'sky_visibility.glsl', 'materials.glsl', 'voxel.glsl', 'reflection_policy.glsl', 'cloud_noise.glsl', 'output_quality.glsl'
+        include 'solstice*.glsl', 'environment.glsl', 'surface_rays.glsl', 'surface_extra.glsl', 'heightfield.glsl', 'labpbr.glsl', 'history.glsl', 'texture_history.glsl', 'frame.glsl', 'surface.glsl', 'rays.glsl', 'sky_visibility.glsl', 'materials.glsl', 'voxel.glsl', 'reflection_policy.glsl', 'cloud_noise.glsl', 'output_quality.glsl'
         into 'assets/greenmarine/shaders/include'
     }
 }
@@ -213,7 +225,7 @@ tasks.register('buildAndroidNative', Exec) {
 }
 loom {
     mods {
-        greenmarine { sourceSet sourceSets.main }
+        greenmarine { sourceSet sourceSets.main; sourceSet sourceSets.integration }
         if (runtimeProbe) greenmarine_probe { sourceSet sourceSets.probe }
     }
     runs {
@@ -230,6 +242,19 @@ loom {
             if (providers.gradleProperty('pbrProbe').isPresent()) vmArg '-Dgreenmarine.probe.pbr=true'
             if (providers.gradleProperty('lookProbe').isPresent()) vmArg '-Dgreenmarine.probe.look=true'
             if (providers.gradleProperty('daylightProbe').isPresent()) vmArg '-Dgreenmarine.probe.daylight=true'
+            if (providers.gradleProperty('solsticeRepairProbe').isPresent()) {
+                if (!providers.gradleProperty('probeRunDir').isPresent() || file(providers.gradleProperty('probeRunDir').get()).canonicalFile == file('run').canonicalFile)
+                    throw new GradleException('solsticeRepairProbe requires an owned scratch probeRunDir')
+                vmArg '-Dgreenmarine.probe.solstice_repair=true'
+            }
+            if (providers.gradleProperty('solsticeRepairOwner').isPresent()) vmArg '-Dgreenmarine.probe.solstice_repair.owner=true'
+            if (providers.gradleProperty('solsticeRepairMotion').isPresent()) vmArg '-Dgreenmarine.probe.solstice_repair.motion=true'
+            if (providers.gradleProperty('entityLightProbe').isPresent()) {
+                if (!providers.gradleProperty('probeRunDir').isPresent() || file(providers.gradleProperty('probeRunDir').get()).canonicalFile == file('run').canonicalFile)
+                    throw new GradleException('entityLightProbe requires an owned scratch probeRunDir')
+                vmArg '-Dgreenmarine.probe.entity_light=true'
+                vmArg '-Dgreenmarine.probe.entity_light.scratch=true'
+            }
             if (providers.gradleProperty('caveProbe').isPresent()) vmArg '-Dgreenmarine.probe.cave=true'
             if (providers.gradleProperty('caveClose').isPresent()) vmArg '-Dgreenmarine.probe.cave.close=true'
             if (providers.gradleProperty('woodGiProbe').isPresent()) vmArg '-Dgreenmarine.probe.cave.wood=true'
@@ -252,6 +277,24 @@ loom {
             if (providers.gradleProperty('waterProbe').isPresent()) vmArg '-Dgreenmarine.probe.water=true'
             if (providers.gradleProperty('renderApiProbe').isPresent()) vmArg '-Dgreenmarine.probe.render_api=true'
             if (providers.gradleProperty('computeProbe').isPresent()) vmArg '-Dgreenmarine.probe.compute=true'
+            if (providers.gradleProperty('graphicsStagesProbe').isPresent()) vmArg '-Dgreenmarine.probe.graphics_stages=true'
+            if (providers.gradleProperty('automaticImportProbe').isPresent()) vmArg '-Dgreenmarine.probe.automatic_import=true'
+            if (providers.gradleProperty('automaticTerrainProbe').isPresent()) vmArg '-Dgreenmarine.probe.automatic_terrain=true'
+            if (providers.gradleProperty('worldStageProof').isPresent()) vmArg '-Dgreenmarine.probe.world_stage_proof=' + providers.gradleProperty('worldStageProof').get()
+            if (providers.gradleProperty('fragmentDepthProof').isPresent()) vmArg '-Dgreenmarine.probe.fragment_depth=true'
+            if (providers.gradleProperty('sampledDepthProof').isPresent()) vmArg '-Dgreenmarine.probe.sampled_depth=true'
+            if (providers.gradleProperty('imageClearProbe').isPresent()) vmArg '-Dgreenmarine.probe.image_clear=true'
+            if (providers.gradleProperty('terrainAttributesProbe').isPresent()) vmArg '-Dgreenmarine.probe.terrain_attributes=true'
+            if (providers.gradleProperty('terrainDrawsProbe').isPresent()) { vmArg '-Dgreenmarine.probe.terrain_attributes=true'; vmArg '-Dgreenmarine.probe.terrain_draws=true' }
+            if (providers.gradleProperty('terrainAdapterProbeDir').isPresent()) vmArg '-Dgreenmarine.probe.terrain_adapter_dir=' + providers.gradleProperty('terrainAdapterProbeDir').get()
+            if (providers.gradleProperty('volumeProbe').isPresent()) vmArg '-Dgreenmarine.probe.volume=true'
+            if (providers.gradleProperty('worldMrtProbe').isPresent()) vmArg '-Dgreenmarine.probe.world_mrt=true'
+            if (providers.gradleProperty('worldMrtOwned').isPresent()) vmArg '-Dgreenmarine.probe.world_mrt_owned=true'
+            if (providers.gradleProperty('mrtProbe').isPresent()) vmArg '-Dgreenmarine.probe.mrt=true'
+            if (providers.gradleProperty('phaseProbe').isPresent()) { vmArg '-Dgreenmarine.probe.mrt=true'; vmArg '-Dgreenmarine.probe.phases=true' }
+            if (providers.gradleProperty('uniformAbiMismatch').isPresent()) vmArg '-Dgreenmarine.probe.uniform_abi_mismatch=' + providers.gradleProperty('uniformAbiMismatch').get()
+            if (providers.gradleProperty('uniformCopyProbe').isPresent()) vmArg '-Dgreenmarine.probe.uniform_copy=true'
+            if (providers.gradleProperty('microGridProbe').isPresent()) vmArg '-Dgreenmarine.probe.microgrid=true'
             if (providers.gradleProperty('voxelProbe').isPresent()) vmArg '-Dgreenmarine.probe.voxel=true'
             if (providers.gradleProperty('worldLightingProbe').isPresent()) vmArg '-Dgreenmarine.probe.world=true'
             if (providers.gradleProperty('worldRestoreMode').isPresent()) vmArg '-Dgreenmarine.probe.restore_mode=' + providers.gradleProperty('worldRestoreMode').get()

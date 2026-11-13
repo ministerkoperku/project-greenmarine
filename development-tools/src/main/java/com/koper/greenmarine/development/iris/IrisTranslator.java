@@ -110,6 +110,12 @@ public final class IrisTranslator {
     }
 
     private static String compatBuiltins(String text, IrisStage stage, List<String> notes) {
+        if (stage == IrisStage.VERTEX) {
+            // Keep comments opaque when adapting the API's index identifiers.
+            var indices = Pattern.compile("(?s)/\\*.*?\\*/|//[^\\r\\n]*|\\b(gl_VertexID|gl_InstanceID)\\b").matcher(text);
+            text = indices.replaceAll(m -> Matcher.quoteReplacement(m.group(1) == null ? m.group()
+                : m.group(1).equals("gl_VertexID") ? "gl_VertexIndex" : "gl_InstanceIndex"));
+        }
         text = text.replaceAll("\\bgl_ModelViewProjectionMatrix\\b", "(iris_ProjMat * iris_ModelViewMat)")
             .replaceAll("\\bgl_ModelViewMatrixInverse\\b", "iris_ModelViewMatInverse").replaceAll("\\bgl_ModelViewMatrix\\b", "iris_ModelViewMat")
             .replaceAll("\\bgl_ProjectionMatrixInverse\\b", "iris_ProjMatInverse").replaceAll("\\bgl_ProjectionMatrix\\b", "iris_ProjMat")
@@ -135,8 +141,9 @@ public final class IrisTranslator {
     }
 
     private static String storage(String text, IrisStage stage) {
-        if (stage == IrisStage.VERTEX) text = text.replaceAll("(?m)^(\\s*)attribute\\b", "$1in").replaceAll("(?m)^(\\s*(?:(?:flat|smooth|noperspective|centroid|invariant)\\s+)*)varying\\b", "$1out");
-        if (stage == IrisStage.FRAGMENT) text = text.replaceAll("(?m)^(\\s*(?:(?:flat|smooth|noperspective|centroid|invariant)\\s+)*)varying\\b", "$1in");
+        // Storage is a token property; preprocessing may place several declarations on one line.
+        if (stage == IrisStage.VERTEX) text = text.replaceAll("\\battribute\\b", "in").replaceAll("\\bvarying\\b", "out");
+        if (stage == IrisStage.FRAGMENT) text = text.replaceAll("\\bvarying\\b", "in");
         return text;
     }
 

@@ -1,6 +1,7 @@
 package com.koper.greenmarine.mixin;
 
 import com.koper.greenmarine.client.world.WorldPrograms;
+import com.koper.greenmarine.client.PackRenderer;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
 import com.mojang.renderpearl.api.commands.RenderPass;
@@ -33,18 +34,22 @@ public abstract class WorldTransparencyMixin {
     }
     @Redirect(method="lambda$addMainPass$0",at=@At(value="INVOKE",target="Lnet/minecraft/client/renderer/LevelRenderer;executeClassicTransparency(Lnet/minecraft/client/renderer/chunk/ChunkSectionsToRender;Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;Lcom/mojang/renderpearl/api/commands/RenderPass;)V"))
     private void greenmarine$defer(LevelRenderer renderer,ChunkSectionsToRender chunks,FeatureRenderDispatcher.PreparedFrame features,RenderPass pass) {
-        if(WorldPrograms.enabled()){greenmarine$chunks=chunks;greenmarine$features=features;}
+        if(WorldPrograms.enabled() || PackRenderer.needsAfterOpaque()){greenmarine$chunks=chunks;greenmarine$features=features;}
         else executeClassicTransparency(chunks,features,pass);
     }
     @Inject(method="lambda$addMainPass$0",at=@At(value="INVOKE",target="Lnet/minecraft/client/renderer/LevelRenderer;executeOit(Lnet/minecraft/client/renderer/chunk/ChunkSectionsToRender;Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;)V"))
     private void greenmarine$opaqueOit(GpuBufferSlice fog,boolean oit,ChunkSectionsToRender chunks,FeatureRenderDispatcher.PreparedFrame features,boolean a,boolean b,CallbackInfo ci) {
         var main=targets.main.get();WorldPrograms.captureOpaque(main);WorldPrograms.captureMaterials(main,fog,chunks,chunkLayerSampler,net.minecraft.client.Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.renderWireframeTerrain);
+        PackRenderer.afterOpaque();
     }
     @Inject(method="lambda$addMainPass$0",at=@At(value="INVOKE",target="Lnet/minecraft/client/renderer/LevelRenderer;executeOutline(Lnet/minecraft/client/renderer/feature/FeatureRenderDispatcher$PreparedFrame;)V"))
     private void greenmarine$classic(GpuBufferSlice fog,boolean oit,ChunkSectionsToRender chunks,FeatureRenderDispatcher.PreparedFrame features,boolean a,boolean b,CallbackInfo ci) {
+        // For classic transparency the redirect left the host solid pass intact; it is now
+        // closed. Pack rendering here cannot nest a Vulkan RenderPass. OIT uses its earlier hook.
         if(greenmarine$chunks==null)return;
         var deferred=greenmarine$chunks;var prepared=greenmarine$features;greenmarine$chunks=null;greenmarine$features=null;
         var main=targets.main.get();WorldPrograms.captureOpaque(main);WorldPrograms.captureMaterials(main,fog,chunks,chunkLayerSampler,net.minecraft.client.Minecraft.getInstance().gameRenderer.gameRenderState().levelRenderState.renderWireframeTerrain);
+        PackRenderer.afterOpaque();
         var encoder=RenderSystem.getDevice().createCommandEncoder();
         try(var pass=encoder.createRenderPass(()->"GreenMarine refractive transparency",main.getColorTextureView(),Optional.empty(),main.getDepthTextureView(),OptionalDouble.empty())) {
             RenderSystem.bindDefaultUniforms(pass);pass.setUniform("Fog",fog);executeClassicTransparency(deferred,prepared,pass);

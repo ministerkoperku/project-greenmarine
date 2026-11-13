@@ -42,12 +42,13 @@ public final class RayWorld {
         float cameraY(double value) {return (float)(value-y);}
         float cameraZ(double value) {return (float)(value-z);}
     }
-    private record Prepared(long epoch,long revision,SceneBounds bounds,SceneInfo scene,long token,int status,String error,long packNanos,long prepareNanos,boolean unchanged) {}
+    private record Prepared(long epoch,long revision,long contentHash,SceneBounds bounds,SceneInfo scene,long token,int status,String error,long packNanos,long prepareNanos,boolean unchanged) {}
     private static final class Submission {
         final long serial;final GpuFence fence;final CommandEncoder encoder;final List<Object> references;
+        final PlayerReflection.Snapshot actors;
         boolean submitted;
-        Submission(long serial,GpuFence fence,CommandEncoder encoder,Object... references) {
-            this.serial=serial;this.fence=fence;this.encoder=encoder;this.references=List.of(references);
+        Submission(long serial,GpuFence fence,CommandEncoder encoder,PlayerReflection.Snapshot actors,Object... references) {
+            this.serial=serial;this.fence=fence;this.encoder=encoder;this.references=List.of(references);this.actors=actors;
         }
     }
     public record DynamicMetrics(long generation,long submittedGeneration,long lastPublishNanos,long lastSubmitNanos,
@@ -87,10 +88,11 @@ public final class RayWorld {
             SCAN.boundsReadyPending(),scene==null?0:scene.x(),scene==null?0:scene.y(),scene==null?0:scene.z(),packNanos,prepareNanos,publishNanos,
             busyCount,discarded,SCAN.metrics(),nativeRt!=null?nativeRt.asyncStats():new long[14]);
     }
-    public static void invalidateBlock(BlockPos position) {SCAN.invalidateBlock(position);}
-    public static void invalidateColumn(int x,int z) {SCAN.invalidateColumn(x,z);}
-    public static void unloadColumn(int x,int z) {SCAN.unloadColumn(x,z);}
-    public static void invalidateGeometry() {SCAN.invalidateAll();}
+    public static void invalidateBlock(BlockPos position) {SCAN.invalidateBlock(position);SurfaceLights.invalidateBlock(position);}
+    public static void invalidateSection(int x,int y,int z) {SCAN.invalidateSection(x,y,z);SurfaceLights.invalidateSection(x,y,z);}
+    public static void invalidateColumn(int x,int z) {SCAN.invalidateColumn(x,z);SurfaceLights.invalidateColumn(x,z);}
+    public static void unloadColumn(int x,int z) {SCAN.unloadColumn(x,z);SurfaceLights.invalidateColumn(x,z);}
+    public static void invalidateGeometry() {SCAN.invalidateAll();SurfaceLights.reset();}
 
     private static final Matrix4f PROJECTION=new Matrix4f(), INVERSE=new Matrix4f();
     private static final ByteBuffer FRAME=ByteBuffer.allocateDirect(320).order(ByteOrder.nativeOrder());
@@ -151,8 +153,8 @@ public final class RayWorld {
             }
             if(prepared!=null) {
                 var next=prepared;
-                if(next.epoch()!=epoch || snapshot==null || !next.bounds().equals(snapshot.bounds())) {
-                    if(next.token()!=0)nativeRt.discardPreparedScene(next.token());discarded++;prepared=null;requestedContent=null;
+                if(next.epoch()!=epoch || !SCAN.canPublish(next.bounds(),next.contentHash())) {
+                    if(next.token()!=0)nativeRt.discardPreparedScene(next.token());discarded++;prepared=null;requestedRevision=-1;requestedContent=null;
                 } else if(next.status()==1) {busyCount++;requestedRevision=-1;requestedContent=null;prepared=null;}
                 else if(next.status()<0)throw new IllegalStateException(next.error());
                 else if(next.unchanged()) {publishedRevision=next.revision();prepared=null;}
@@ -175,15 +177,16 @@ public final class RayWorld {
                 preparation.start(()->{
                     long packing=System.nanoTime();var mesh=snapshot.assemble();var info=SceneInfo.of(mesh);long packed=System.nanoTime()-packing;
                     boolean unchanged=info.equals(previous);
-                    if(unchanged)return new Prepared(jobEpoch,snapshot.revision(),snapshot.bounds(),info,0,0,"",packed,0,true);
+                    if(unchanged)return new Prepared(jobEpoch,snapshot.revision(),content,snapshot.bounds(),info,0,0,"",packed,0,true);
                     long preparing=System.nanoTime();long token=mesh.triangles()==0?0:bridge.prepareScene(mesh.data(),mesh.triangles());
                     int status=mesh.triangles()==0?0:bridge.prepareStatus();String error=bridge.prepareError();
-                    return new Prepared(jobEpoch,snapshot.revision(),snapshot.bounds(),info,token,status,error,packed,System.nanoTime()-preparing,false);
+                    return new Prepared(jobEpoch,snapshot.revision(),content,snapshot.bounds(),info,token,status,error,packed,System.nanoTime()-preparing,false);
                 });
             }
         } else if(SCAN.boundsReadyPending()==0 && requestedRevision!=SCAN.revision()) {
             // Older native libraries retain their established synchronous ABI.
-            var next=SCAN.completed();var info=SceneInfo.of(next);requestedRevision=SCAN.revision();
+            var next=SCAN.completed();if(next==null)return;
+            var info=SceneInfo.of(next);requestedRevision=SCAN.revision();
             if(!info.equals(scene)) {
                 long build=System.nanoTime();int code=next.triangles()==0?nativeRt.resetScene():nativeRt.scene(next.data(),next.triangles());
                 buildNanos+=System.nanoTime()-build;if(code!=0)throw new IllegalStateException(nativeRt.error());
@@ -200,6 +203,7 @@ public final class RayWorld {
             }
             if(!submission.fence.awaitCompletion(wait?GpuFence.NO_TIMEOUT:0))break;
             if(nativeRt.submissionCompleted(submission.serial)!=0)throw new IllegalStateException(nativeRt.asyncError());
+            if(submission.actors!=null)submission.actors.close();
             submission.fence.close();SUBMISSIONS.removeFirst();
         }
     }
@@ -244,9 +248,9 @@ public final class RayWorld {
         if(code<0)throw new IllegalStateException(nativeRt.asyncError());
         if(code==1){busyCount++;return -1;}return next;
     }
-    private static Submission queued(CommandEncoder encoder,long lease,GpuFence fence,Object... references) {
+    private static Submission queued(CommandEncoder encoder,long lease,GpuFence fence,PlayerReflection.Snapshot actors,Object... references) {
         if(lease==0)return null;
-        var submission=new Submission(lease,fence,encoder,references);
+        var submission=new Submission(lease,fence,encoder,actors,references);
         SUBMISSIONS.addLast(submission);
         if(nativeRt.submissionSubmitted(lease)!=0)throw new IllegalStateException(nativeRt.asyncError());
         return submission;
@@ -287,7 +291,7 @@ public final class RayWorld {
             // The fence snapshots this batch before host submit advances its index.
             if(lease>0)fence=encoder.createFence();
             backend.execute(command);executed=true;
-            var submission=queued(encoder,lease,fence,color,normal,albedo,atlas);lease=0;
+            var submission=queued(encoder,lease,fence,null,color,normal,albedo,atlas);lease=0;
             if(gpu!=null) gpu.end(encoder,measurement);
             submit(encoder,submission);frames++;ready=true;detail="Hardware RT active: textured model BLAS/TLAS, sun shadows and diffuse rays";
             if(frames>40) CPU.add((System.nanoTime()-started)/1_000_000.0);
@@ -335,6 +339,7 @@ public final class RayWorld {
         surfaceReady=false;playerShadowTraced=false;
         if(!available() || surfaceFailed || !frameReady || ShaderRuntime.rays().effective()!=RayMode.HARDWARE)return;
         long started=System.nanoTime();long lease=0;boolean executed=false;GpuFence fence=null;
+        PlayerReflection.Snapshot player=null;
         try {
             if(!surfaceInitialized) {
                 if(!nativeRt.surfaceAvailable() || nativeRt.initializeSurface(true)!=0)throw new IllegalStateException(nativeRt.surfaceError());
@@ -376,7 +381,7 @@ public final class RayWorld {
             } else surfaceLightsActive=false;
             // Extended modules take 64 boxes plus the combined accessory atlas; legacy keeps 16 boxes/one skin.
             boolean extendedActors=nativeRt.extendedActorsAvailable();
-            var player=(extendedActors || nativeRt.actorsAvailable()) && scene!=null
+            player=(extendedActors || nativeRt.actorsAvailable()) && scene!=null
                 ?PlayerReflection.snapshot(Minecraft.getInstance(),scene.x(),scene.y(),scene.z(),extendedActors):null;
             var skin=player!=null && player.boxes()>0 && player.skin()!=null?player.skin():atlas;
             var backend=(VulkanCommandEncoder)((FrontendCommandEncoder)encoder).backend();var command=backend.allocateAndBeginTransientCommandBuffer();
@@ -397,7 +402,7 @@ public final class RayWorld {
             int ended=org.lwjgl.vulkan.VK12.vkEndCommandBuffer(command);if(ended!=0)throw new IllegalStateException("Unable to finish surface rays: "+ended);
             if(lease>0)fence=encoder.createFence();
             backend.execute(command);executed=true;
-            var submission=queued(encoder,lease,fence,surfaceColor,reflection,Objects.requireNonNullElse(surfaceExtra,surfaceColor),atlas,normalDepth,material,skin);lease=0;
+            var submission=queued(encoder,lease,fence,player,surfaceColor,reflection,Objects.requireNonNullElse(surfaceExtra,surfaceColor),atlas,normalDepth,material,skin);lease=0;
             if(surfaceGpu!=null)surfaceGpu.end(encoder,measure);
             submit(encoder,submission);surfaceFrames++;surfaceReady=true;playerShadowTraced=player!=null && player.boxes()>0;
             surfaceDetail="Hardware surface RT active: raster materials, sun/GI and offscreen model reflections; "
@@ -406,7 +411,15 @@ public final class RayWorld {
             if(surfaceFrames>40)SURFACE_CPU.add((System.nanoTime()-started)/1e6);
         } catch(RuntimeException|LinkageError error) {
             surfaceFailed=true;playerShadowTraced=false;surfaceDetail="Surface RT unavailable: "+error.getMessage()+"; raster surface fallback";GreenMarine.LOGGER.error(surfaceDetail,error);
-        } finally {if(lease>0 && !executed){nativeRt.submissionCancel(lease);if(fence!=null)fence.close();}}
+        } finally {
+            if(player!=null) {
+                boolean retained=false;
+                for(var submission:SUBMISSIONS)if(submission.actors==player){retained=true;break;}
+                // Legacy record calls copy actor bytes into vkCmdUpdateBuffer before returning.
+                if(!retained)player.close();
+            }
+            if(lease>0 && !executed){nativeRt.submissionCancel(lease);if(fence!=null)fence.close();}
+        }
     }
     private static void closeSurfaceTargets() {
         if(surfaceColorView!=null)surfaceColorView.close();if(reflectionView!=null)reflectionView.close();if(surfaceExtraView!=null)surfaceExtraView.close();

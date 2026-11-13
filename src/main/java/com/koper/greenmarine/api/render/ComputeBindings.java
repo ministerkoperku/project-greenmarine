@@ -38,14 +38,16 @@ public final class ComputeBindings {
     public ComputeBindings image(String name, TextureHandle texture) { return image(name, texture.view()); }
     /** Storage image, read/write in GENERAL layout; single mip, the whole view. */
     public ComputeBindings image(String name, GpuTextureView view) {
-        slot(name, ComputeHandle.Access.STORAGE_IMAGE);
+        var slot = slot(name, ComputeHandle.Access.STORAGE_IMAGE);
+        com.koper.greenmarine.client.HostImages.requireDimensions(name, slot.dimensions(), view.texture());
         if (!ComputeBackend.isStorage(view.texture())) throw new IllegalArgumentException(name + " needs a storage texture");
         if (!writtenImages.add(view.texture()) || sampledImages.contains(view.texture())) throw new IllegalArgumentException("Texture aliased within one dispatch: " + name);
         bound.put(name, new ComputeBackend.StorageImage(((com.mojang.renderpearl.backend.vulkan.VulkanGpuTextureView) view).vkImageView()));
         return this;
     }
     public ComputeBindings texture(String name, GpuTextureView view, FilterMode filter) {
-        slot(name, ComputeHandle.Access.SAMPLED_TEXTURE);
+        var slot = slot(name, ComputeHandle.Access.SAMPLED_TEXTURE);
+        com.koper.greenmarine.client.HostImages.requireDimensions(name, slot.dimensions(), view.texture());
         if ((view.texture().usage() & GpuTexture.USAGE_TEXTURE_BINDING) == 0) throw new IllegalArgumentException(name + " is not sampleable");
         if (writtenImages.contains(view.texture()) || !sampledImages.add(view.texture())) throw new IllegalArgumentException("Texture aliased within one dispatch: " + name);
         var sampler = (com.mojang.renderpearl.backend.vulkan.VulkanGpuSampler) com.mojang.blaze3d.systems.RenderSystem.getSamplerCache().getClampToEdge(Objects.requireNonNull(filter));
